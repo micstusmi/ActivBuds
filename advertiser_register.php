@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $message = "Please enter a valid email address.";
     } elseif ($password !== $password2) {
-        $message = "Passwords do not match.";
+        $message = "Passwords don't match.";
     } else {
         // Check if email already used as advertiser_user
         $stmt = $conn->prepare("SELECT id FROM advertiser_users WHERE email = ?");
