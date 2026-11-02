@@ -1,0 +1,89 @@
+# ActivBuds advertiser campaign drafts
+
+This implements the existing blank `campaign_edit.php` route. It uses the
+advertiser account and `ad_campaigns` columns already referenced by the dashboard.
+It does not enable an ad-serving or billing system.
+
+## Working flow
+
+1. Sign in as an active advertiser owner and choose **Create new campaign** from
+   the existing dashboard.
+2. Enter a name, a planned whole-number radius of 1–250 km, and image/carousel/video.
+3. Inspect the live settings summary and choose **Save draft**.
+4. Reopen the saved campaign from the dashboard's existing **View / Edit** link.
+5. Update a draft or save without changes. A stale tab receives a conflict rather
+   than overwriting a newer draft. Campaigns outside draft status are read-only.
+
+The POST redirects to the saved draft and a session-bound confirmation. No URL
+parameter alone creates a success message. Signed-out visitors go to sign-in;
+missing/foreign campaign IDs return the same unavailable message. A fresh
+advertiser-user query checks active owner membership on each request. Reads and
+writes use the session advertiser ID, never a submitted advertiser ID. CSRF and
+input validation protect saves. The compare-and-update predicate includes the
+previous fields with binary text comparison and draft status.
+
+## What is deliberately not activated
+
+There is no publishing, spend, estimated auction price, location lookup, media
+upload, provider request or ad placement. Radius and format are draft preferences.
+An active campaign cannot be edited or paused with this editor. Authorised staff
+editing, real-time pricing, delivery and creative uploads remain later slices of
+the original product request. The product's legacy Fitbuds branding is preserved;
+this patch does not invent a new logo/favicon or claim shared Suite sign-in.
+
+## Schema and installation
+
+`schema/001_campaign_drafts.sql` is a minimal fresh-install campaign table, not a
+discovery or upgrade script. It creates only `ad_campaigns`; existing advertiser
+accounts and locations are prerequisites. No migration is applied by browsing
+the page. No data is dropped or rewritten by the SQL file.
+
+Before installing into an existing database, inspect its actual `SHOW CREATE
+TABLE ad_campaigns`, table engine, required columns without defaults, triggers,
+status/media constraints and advertiser ID types. The repository did not contain
+that schema. `CREATE TABLE IF NOT EXISTS` does not validate an existing table.
+An operator must reconcile differences through a reviewed upgrade rather than
+assuming the fresh baseline is compatible. Native MySQL save/update and concurrent
+write checks on that actual schema remain required before deployment.
+
+Install the editor, helper and two assets together. Asset loaders are versioned
+`drafts-1`; advance both references for later changed assets. Retain the current
+shared header/footer. Back up replaced source and database before approved
+schema work. Recovery restores the prior source; preserve campaign drafts and
+reconcile an interrupted save before creating another. Do not blindly reverse
+data or drop the table. Keep one deployment owner and inspect the actual runtime
+root/source first; no ActivBuds production location has been verified here.
+
+## Focused evidence and remaining acceptance
+
+Run `PHP_BINARY=/path/to/php python3 tests/campaign_drafts.py` in a source checkout.
+The fixture executes the real controller/helper through a temporary PHP HTTP
+server with synthetic persisted DB and owner identities. It covers create,
+redirect/reopen, escaping, edit/no-change, CSRF/invalid input, stale revision,
+active-campaign refusal, foreign advertiser isolation, staff refusal and bad IDs.
+It cannot establish native SQL, real identity/session revocation or deployed
+schema acceptance. `--preview` keeps that isolated synthetic server running for
+local review until interrupted. It is a test router, never a deployable auth mode.
+
+PHP syntax and JavaScript syntax checks apply only to these changed files.
+No unrelated auth/deletion, native database or paid build suite is needed for
+source review; omitted checks must not be reported passed.
+
+### Page shell and visual acceptance
+
+Route: `campaign_edit.php` (new and existing draft).
+
+| Element | Source / current status |
+| --- | --- |
+| Header | Existing `includes/header.php` included unchanged; retains original product branding/account controls |
+| Footer | Existing `includes/footer.php` retained; editor adds visible dashboard/help footer |
+| Sidebar | Scoped advertiser navigation in `campaign_edit.php`; wraps into a readable menu at narrow widths |
+| Favicon | Missing from existing repository/header; approved product asset unavailable, so NOT verified |
+
+Desktop and narrow browser rendering, keyboard/summary interaction, existing
+Bootstrap menu behavior and the actual product favicon still need rendered
+acceptance. No local browser executable was available for screenshots. Do not
+call this restyle visually accepted or production-ready while that required
+shell asset and browser evidence are missing. No exception is inferred from the
+legacy header. Existing `/fitbuds/` absolute header links also need confirmation
+against the actual mount path. Local editor/sidebar links are relative.
