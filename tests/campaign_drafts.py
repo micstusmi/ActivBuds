@@ -153,7 +153,7 @@ def main():
                 status,_,html=req('/campaign_edit.php?_as=owner')
                 assert status==200 and 'Create a campaign' in html
                 csrf=token(html,'csrf_token')
-                valid={'name':'Summer <training>','target_radius_km':'25','media_type':'carousel','csrf_token':csrf,
+                valid={'name':'Summer <training>','target_radius_km':'25','media_type':'carousel','csrf_token':csrf,'create_key':token(html,'create_key'),
                     'headline':'Try <outdoor> training','message':'Meet your next training partner.',
                     'destination_url':'https://example.test/training','location_id':'10'}
                 assert req('/campaign_edit.php',{**valid,'csrf_token':'wrong'})[0]==403
@@ -231,6 +231,19 @@ def main():
                 revision=token(html,'revision')
                 assert req('/campaign_edit.php?id=2',{**valid,'name':'Updated campaign','location_id':'','revision':revision})[0]==303
                 assert json.loads(data.read_text())['2']['location_id'] is None
+                _,_,fresh=req('/campaign_edit.php')
+                auto={**valid,'name':'Autosaved draft','autosave':'1','create_key':token(fresh,'create_key')}
+                code,_,reply=req('/campaign_edit.php',auto)
+                assert code==200,reply
+                confirmation=json.loads(reply)
+                assert confirmation['id']==4
+                assert req('/campaign_edit.php',auto)[2]==reply
+                assert len(json.loads(data.read_text()))==4
+                code,_,reply=req('/campaign_edit.php?id=4',{**auto,'revision':confirmation['revision'],'name':'Autosaved update'})
+                assert code==200 and json.loads(reply)['revision']!=confirmation['revision']
+                assert req('/campaign_edit.php?id=4',{**auto,'revision':confirmation['revision']})[0]==409
+                assert req('/campaign_edit.php',{**auto,'name':'Changed creation'})[0]==409
+                assert req('/campaign_edit.php?id=4',{**auto,'csrf_token':'bad'})[0]==403
                 print(f'PASS {checks} actual HTTP requests: create/reopen/edit/no-change, CSRF, '
                       'validation, stale draft, active refusal and advertiser isolation; synthetic DB only',flush=True)
                 if '--preview' in sys.argv:

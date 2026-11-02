@@ -9,3 +9,5 @@
 @media(prefers-reduced-motion:reduce){.campaign-workspace *{scroll-behavior:auto}}
 
 .campaign-save-state{color:var(--campaign-muted);font-size:.9rem;margin:20px 0 0}.campaign-primary:disabled{opacity:.7;cursor:wait}
+
+.campaign-retry{border:1px solid var(--campaign-blue);border-radius:8px;padding:10px 16px;background:#fff;color:var(--campaign-ink);min-height:44px}.campaign-workspace [hidden]{display:none!important}

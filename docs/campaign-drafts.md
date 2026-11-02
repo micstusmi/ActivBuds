@@ -88,7 +88,7 @@ assuming the fresh baseline is compatible. Native MySQL save/update and concurre
 write checks on that actual schema remain required before deployment.
 
 Install the editor, helper and two assets together. Asset loaders are versioned
-editor CSS `drafts-6` (dashboard `drafts-5`) and JavaScript `drafts-4`; advance each changed asset's references
+editor CSS `drafts-7` (dashboard `drafts-5`) and JavaScript `drafts-5`; advance each changed asset's references
 for later revisions. Retain the current
 shared header/footer. Back up replaced source and database before approved
 schema work. Recovery restores the prior source; preserve campaign drafts and
@@ -139,14 +139,33 @@ shell asset and browser evidence are missing. No exception is inferred from the
 legacy header. Existing `/fitbuds/` absolute header links also need confirmation
 against the actual mount path. Local editor/sidebar links are relative.
 
-## In-progress edits
+## Autosave
 
-The editor displays whether the current form differs from the values loaded on
-this page. A rejected POST remains marked unsaved, including when its fields
-are left untouched. Browsers can warn before leaving an edited draft; their native prompt
-is subject to browser interaction rules. This is not autosave or recovery storage.
-A valid save disables its submit button while navigating, preventing repeated
-clicks on that page. Browser Back restores the button. Existing server-side
-validation, CSRF and stale-draft protection remain authoritative. If a request is
-interrupted, inspect the dashboard before retrying; a lost response is not proof
-that a save failed. This does not provide cross-tab request idempotency.
+With JavaScript enabled, valid edits save after 900 ms of idle typing. The Save
+button is hidden; the page shows Saving / Saved / Couldn’t save. A campaign name
+is required before a new draft is created. Writes are single-flight: edits made
+during a request remain dirty and queue a follow-up using the confirmed revision.
+The client never labels newer unsent edits as saved. Native form validation and
+server validation remain authoritative. Without JavaScript the normal Save form
+continues to work.
+
+CSRF, current owner checks, advertiser scoping and optimistic comparisons apply
+to every autosave. A conflict or expired login/form stops autosave and preserves
+current text on the page for copying/reconciliation. A transient existing-draft
+failure offers Retry. No background retry loop or local storage of ad text is used.
+Unsaved/in-flight edits trigger the browser’s native leave warning when supported.
+
+New-page creation keys are session-bound, advertiser-bound and limited to 20
+recent new forms. An attempted key is persisted before INSERT. A repeated exact
+creation with a recorded response returns the same ID/revision; changed/replaced
+or unconfirmed attempts return a conflict rather than inserting again. If the
+initial network reply is lost, the client stops and directs the owner to check
+the dashboard, retaining the page’s edits. This is session-scoped duplicate
+protection, not a durable database idempotency ledger. Expired/evicted tokens are
+refused; they do not silently create another draft.
+
+Run `node tests/campaign_autosave.js` for the shipped client’s single-flight,
+queued edits/revision, name gate, conflict, ambiguous-create and retry cases
+against a DOM/network collaborator. The PHP HTTP fixture now has 47 requests,
+including JSON creation, exact replay, revised edit, stale edit, changed-create
+refusal and CSRF. Native database and actual browser acceptance are still pending.
