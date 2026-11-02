@@ -1,124 +1,111 @@
 <?php
+declare(strict_types=1);
 session_start();
-
-// Require advertiser login
 if (!isset($_SESSION['adv_user_id'], $_SESSION['adv_advertiser_id'])) {
-    header("Location: advertiser_login.php");
-    exit;
+    header('Location: advertiser_login.php'); exit;
 }
-
-require __DIR__ . "/includes/db.php";
-
-$advertiser_id = (int)$_SESSION['adv_advertiser_id'];
-$user_name     = $_SESSION['adv_user_name'] ?? '';
-$adv_name      = $_SESSION['adv_advertiser_name'] ?? '';
-
-// Fetch basic stats
-$stats = [
-    'impressions' => 0,
-    'clicks'      => 0,
-    'spend'       => 0.00
-];
-
-$stmt = $conn->prepare("
-    SELECT 
-        SUM(impressions) AS impressions,
-        SUM(clicks) AS clicks,
-        SUM(spend) AS spend
-    FROM ad_metrics_daily
-    WHERE campaign_id IN (
-        SELECT id FROM ad_campaigns WHERE advertiser_id = ?
-    )
-");
-$stmt->bind_param("i", $advertiser_id);
-$stmt->execute();
-$result = $stmt->get_result();
-if ($row = $result->fetch_assoc()) {
-    $stats['impressions'] = (int)($row['impressions'] ?? 0);
-    $stats['clicks']      = (int)($row['clicks'] ?? 0);
-    $stats['spend']       = (float)($row['spend'] ?? 0);
-}
-$stmt->close();
-
-// Fetch campaigns
+require __DIR__.'/includes/campaigns.php';
+$advertiser = (int)$_SESSION['adv_advertiser_id'];
+$search = is_string($_GET['q'] ?? null) ? trim($_GET['q']) : '';
+$draft_only = ($_GET['filter'] ?? '') === 'draft';
+$problem = '';
 $campaigns = [];
-$stmt = $conn->prepare("
-    SELECT id, name, status, target_radius_km, media_type
-    FROM ad_campaigns
-    WHERE advertiser_id = ?
-    ORDER BY created_at DESC
-");
-$stmt->bind_param("i", $advertiser_id);
-$stmt->execute();
-$result = $stmt->get_result();
-while ($row = $result->fetch_assoc()) {
-    $campaigns[] = $row;
+$stats = null;
+if (strlen($search) > 160) {
+    http_response_code(400);
+    $problem = 'Use a shorter campaign search.';
 }
-$stmt->close();
-require __DIR__ . "/includes/header.php";
+try {
+    require __DIR__.'/includes/db.php';
+    // Recheck account membership; session values alone are not current authority.
+    $stmt = $conn->prepare('SELECT role FROM advertiser_users
+        WHERE id = ? AND advertiser_id = ? AND is_active = 1 LIMIT 1');
+    $user = (int)$_SESSION['adv_user_id'];
+    $stmt->bind_param('ii', $user, $advertiser);
+    $stmt->execute();
+    $member = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    if (!$member) {
+        http_response_code(403);
+        $problem = 'Your access to this advertiser is no longer available. Sign in again or contact the owner.';
+    } elseif ($problem === '') {
+        $campaigns = campaign_list($conn, $advertiser, $search, $draft_only);
+        try {
+            $stmt = $conn->prepare('SELECT SUM(impressions) AS impressions,
+                SUM(clicks) AS clicks, SUM(spend) AS spend FROM ad_metrics_daily
+                WHERE campaign_id IN (SELECT id FROM ad_campaigns WHERE advertiser_id = ?)');
+            $stmt->bind_param('i', $advertiser);
+            $stmt->execute();
+            $row = $stmt->get_result()->fetch_assoc();
+            $stats = ['impressions'=>(int)($row['impressions'] ?? 0),
+                'clicks'=>(int)($row['clicks'] ?? 0), 'spend'=>(float)($row['spend'] ?? 0)];
+            $stmt->close();
+        } catch (Throwable $metrics_error) {
+            // Campaign planning remains useful when the legacy metrics table is not installed.
+            $stats = null;
+        }
+    }
+} catch (Throwable $error) {
+    http_response_code(503);
+    $problem = 'Campaigns are temporarily unavailable. Please try again later.';
+}
+$owner = isset($member) && ($member['role'] ?? '') === 'owner';
+require __DIR__.'/includes/header.php';
 ?>
-
-<h2>Fitbuds Advertiser Dashboard</h2>
-
-<p>Welcome, <?php echo htmlspecialchars($user_name); ?> from <?php echo htmlspecialchars($adv_name); ?>.</p>
-
-<div class="row mb-4">
-  <div class="col-md-4">
-    <div class="card p-3">
-      <h5>Total impressions</h5>
-      <p class="fs-4"><?php echo number_format($stats['impressions']); ?></p>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="card p-3">
-      <h5>Total clicks</h5>
-      <p class="fs-4"><?php echo number_format($stats['clicks']); ?></p>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="card p-3">
-      <h5>Total spend</h5>
-      <p class="fs-4">$<?php echo number_format($stats['spend'], 2); ?></p>
-    </div>
-  </div>
+<link rel="stylesheet" href="assets/campaigns.css?v=drafts-2">
+<div class="campaign-workspace">
+  <aside class="campaign-sidebar" aria-label="Advertiser navigation">
+    <p class="campaign-eyebrow">Advertiser workspace</p>
+    <p><?= campaign_escape($_SESSION['adv_advertiser_name'] ?? 'Your business') ?></p>
+    <nav><a href="advertiser_dashboard.php" aria-current="page">Dashboard &amp; campaigns</a>
+      <?php if ($owner): ?><a href="campaign_edit.php">Create a campaign</a><?php endif; ?>
+      <a href="#dashboard-help">Dashboard help</a></nav>
+  </aside>
+  <main class="campaign-main">
+    <header class="campaign-title"><p class="campaign-eyebrow">Advertiser dashboard</p>
+      <h1>Your campaigns</h1><p>Welcome, <?= campaign_escape($_SESSION['adv_user_name'] ?? '') ?>. Plan your promotions and return to saved drafts.</p>
+      <?php if ($owner && $problem === ''): ?><a class="campaign-action" href="campaign_edit.php">+ Create a campaign</a><?php endif; ?>
+    </header>
+    <?php if ($problem !== ''): ?><div class="campaign-error" role="alert"><?= campaign_escape($problem) ?></div><?php endif; ?>
+    <?php if (isset($member) && $member && $problem === ''): ?>
+    <section class="campaign-stats" aria-label="All-time measured advertising totals">
+      <div><span>Total impressions</span><strong><?= $stats === null ? '—' : number_format($stats['impressions']) ?></strong></div>
+      <div><span>Total clicks</span><strong><?= $stats === null ? '—' : number_format($stats['clicks']) ?></strong></div>
+      <div><span>Total spend</span><strong><?= $stats === null ? '—' : '$'.number_format($stats['spend'], 2) ?></strong></div>
+    </section>
+    <p class="campaign-muted"><?= $stats === null ? 'Advertising metrics are currently unavailable.' : 'All-time recorded totals across your campaigns; search filters do not change these totals.' ?> Saving a draft does not start advertising spend.</p>
+    <section class="campaign-panel" aria-labelledby="campaign-list-heading">
+      <h2 id="campaign-list-heading">Campaign library</h2>
+      <form method="get" action="advertiser_dashboard.php" class="campaign-filters">
+        <div><label for="campaign-search">Search campaigns</label><input type="search" id="campaign-search" name="q" value="<?= campaign_escape($search) ?>" placeholder="Campaign name" maxlength="160"></div>
+        <div><label for="campaign-filter">Show</label><select name="filter" id="campaign-filter"><option value="all">All campaigns</option><option value="draft" <?= $draft_only ? 'selected' : '' ?>>Drafts only</option></select></div>
+        <button type="submit" class="campaign-action">Apply filters</button><a href="advertiser_dashboard.php">Clear</a>
+      </form>
+      <?php if (!$campaigns): ?>
+        <div class="campaign-empty"><h3><?= $search !== '' || $draft_only ? 'No matching campaigns' : 'Your first campaign starts here' ?></h3>
+        <p><?= $search !== '' || $draft_only ? 'Try a different name or clear the filters to see all campaigns.' : 'Create a draft with a name, planned radius and format. You can edit it before any advertising is enabled.' ?></p>
+        <?php if ($owner): ?><a href="campaign_edit.php">Create a draft →</a><?php endif; ?></div>
+      <?php else: ?>
+        <p class="campaign-muted"><?= count($campaigns) ?> result<?= count($campaigns) === 1 ? '' : 's' ?> · newest first<?= count($campaigns) === 100 ? ' · showing the first 100; narrow your search for older campaigns' : '' ?></p>
+        <div class="campaign-library">
+        <?php foreach ($campaigns as $campaign): ?>
+          <article class="campaign-row">
+            <div><h3><?= campaign_escape($campaign['name']) ?></h3><span class="campaign-status <?= $campaign['status'] === 'draft' ? 'campaign-status-draft' : '' ?>"><?= campaign_escape($campaign['status']) ?></span></div>
+            <div><span class="campaign-row-label">Planned radius</span><span><?= (int)$campaign['target_radius_km'] ?> km</span></div>
+            <div><span class="campaign-row-label">Format</span><span><?= campaign_escape($campaign['media_type']) ?></span></div>
+            <?php if ($owner): ?><a class="campaign-row-action" href="campaign_edit.php?id=<?= (int)$campaign['id'] ?>"><?= $campaign['status'] === 'draft' ? 'Edit draft' : 'View details' ?> →<span class="campaign-sr-only"> <?= campaign_escape($campaign['name']) ?></span></a><?php endif; ?>
+          </article>
+        <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+      <?php if (!$owner): ?><p class="campaign-muted">You can view this advertiser's campaigns. Ask the owner to create or edit drafts.</p><?php endif; ?>
+    </section>
+    <?php endif; ?>
+    <details class="campaign-panel" id="dashboard-help"><summary>Help with your campaign dashboard</summary>
+      <p>Search by campaign name or show drafts only. Open an existing draft to continue editing it. Existing non-draft campaigns are shown for reference; this workspace cannot activate, pause or charge for advertising.</p>
+      <p>Statistics reflect recorded campaign metrics only. A dash means metrics are unavailable, not that your spend is zero.</p>
+    </details>
+    <footer class="campaign-page-footer"><a href="advertiser_dashboard.php">Advertiser dashboard</a><span>Campaign planning · Drafts only</span></footer>
+  </main>
 </div>
-
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h3>Your campaigns</h3>
-  <a href="campaign_edit.php" class="btn btn-primary">Create new campaign</a>
-</div>
-
-<?php if (empty($campaigns)): ?>
-    <p>You don't have any campaigns yet. Click "Create new campaign" to get started.</p>
-<?php else: ?>
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Status</th>
-          <th>Radius (km)</th>
-          <th>Media</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-      <?php foreach ($campaigns as $c): ?>
-        <tr>
-          <td><?php echo htmlspecialchars($c['name']); ?></td>
-          <td><?php echo htmlspecialchars($c['status']); ?></td>
-          <td><?php echo (int)$c['target_radius_km']; ?></td>
-          <td><?php echo htmlspecialchars($c['media_type']); ?></td>
-          <td>
-            <a href="campaign_edit.php?id=<?php echo (int)$c['id']; ?>" class="btn btn-sm btn-outline-secondary">View / Edit</a>
-          </td>
-        </tr>
-      <?php endforeach; ?>
-      </tbody>
-    </table>
-<?php endif; ?>
-
-<p class="mt-4">
-  <a href="advertiser_logout.php" class="btn btn-link">Log out</a>
-</p>
-
-<?php require __DIR__ . "/includes/footer.php"; ?>
+<?php require __DIR__.'/includes/footer.php'; ?>

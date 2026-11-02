@@ -38,6 +38,22 @@ function campaign_owner($db, int $user, int $advertiser): bool {
     return $allowed;
 }
 
+function campaign_list($db, int $advertiser, string $search, bool $draft_only): array {
+    // Literal substring search: user '%'/'_' are not SQL wildcard operators.
+    $pattern = '%'.str_replace(['=', '%', '_'], ['==', '=%', '=_'], $search).'%';
+    $draft = $draft_only ? 1 : 0;
+    $stmt = $db->prepare("SELECT id, name, status, target_radius_km, media_type
+        FROM ad_campaigns WHERE advertiser_id = ? AND name LIKE ? ESCAPE '='
+        AND (? = 0 OR status = 'draft') ORDER BY created_at DESC, id DESC LIMIT 100");
+    $stmt->bind_param('isi', $advertiser, $pattern, $draft);
+    $stmt->execute();
+    $rows = [];
+    $result = $stmt->get_result();
+    while ($row = $result->fetch_assoc()) $rows[] = $row;
+    $stmt->close();
+    return $rows;
+}
+
 function campaign_find($db, int $advertiser, int $id): ?array {
     $stmt = $db->prepare('SELECT id, name, status, target_radius_km, media_type
         FROM ad_campaigns WHERE id = ? AND advertiser_id = ? LIMIT 1');

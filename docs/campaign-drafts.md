@@ -4,6 +4,16 @@ This implements the existing blank `campaign_edit.php` route. It uses the
 advertiser account and `ad_campaigns` columns already referenced by the dashboard.
 It does not enable an ad-serving or billing system.
 
+The connected `advertiser_dashboard.php` now searches campaign names, filters
+drafts and provides edit/view links. Search is a literal substring, so `%` and `_`
+do not become wildcards. Lists are advertiser-scoped, newest first, capped at 100
+matching rows with a visible limit notice. Empty and filtered-empty states have
+clear next actions. Staff retain read-only campaign visibility; current active
+owner membership is required for editing. The dashboard rechecks membership on
+each request. Legacy aggregate metrics remain all-time and independent of list
+filters. Missing metrics do not block campaign planning and display unavailable,
+never a fabricated zero.
+
 ## Working flow
 
 1. Sign in as an active advertiser owner and choose **Create new campaign** from
@@ -61,6 +71,12 @@ The fixture executes the real controller/helper through a temporary PHP HTTP
 server with synthetic persisted DB and owner identities. It covers create,
 redirect/reopen, escaping, edit/no-change, CSRF/invalid input, stale revision,
 active-campaign refusal, foreign advertiser isolation, staff refusal and bad IDs.
+The connected dashboard checks include campaign search/draft filter, literal
+wildcard search, read-only staff, foreign advertiser empty state and missing
+metrics recovery. The actual controller/helper suite passed 21 HTTP requests
+with its synthetic data collaborator. The directly affected existing 10-case
+advertiser HTTP fixture and real PHP session/CSRF/credential fixture also pass;
+their test copies now include the dashboard helper and membership response.
 It cannot establish native SQL, real identity/session revocation or deployed
 schema acceptance. `--preview` keeps that isolated synthetic server running for
 local review until interrupted. It is a test router, never a deployable auth mode.
@@ -71,7 +87,7 @@ source review; omitted checks must not be reported passed.
 
 ### Page shell and visual acceptance
 
-Route: `campaign_edit.php` (new and existing draft).
+Routes: `campaign_edit.php` (new and existing draft) and `advertiser_dashboard.php`.
 
 | Element | Source / current status |
 | --- | --- |

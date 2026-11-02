@@ -30,7 +30,21 @@ class CampaignStatement {
     function execute() {
         $file=getenv('CAMPAIGN_FIXTURE_DATA');
         $data=json_decode(file_get_contents($file),true); $p=$this->params;
-        if (str_contains($this->sql,'FROM advertiser_users')) {
+        if (str_starts_with($this->sql,'SELECT role FROM advertiser_users')) {
+            $valid=($p[0]===7 && $p[1]===9) || ($p[0]===8 && $p[1]===10) || ($p[0]===11 && $p[1]===9);
+            $this->rows=$valid ? [['role'=>$p[0]===11 ? 'staff' : 'owner']] : [];
+        } elseif (str_contains($this->sql,'SUM(impressions)')) {
+            if (($_GET['_metrics'] ?? '')==='missing') throw new RuntimeException('Synthetic missing metrics');
+            $this->rows=[['impressions'=>100,'clicks'=>5,'spend'=>1.25]];
+        } elseif (str_contains($this->sql,'FROM ad_campaigns WHERE advertiser_id')) {
+            $literal=substr($p[1],1,-1);
+            $literal=preg_replace('/=(.)/s','$1',$literal);
+            $rows=array_values(array_filter($data,function($r) use($p,$literal) {
+                return $r['advertiser_id']===$p[0] && (!$p[2] || $r['status']==='draft')
+                    && stripos($r['name'],$literal)!==false;
+            }));
+            usort($rows,fn($a,$b)=>$b['id']<=>$a['id']); $this->rows=array_slice($rows,0,100);
+        } elseif (str_contains($this->sql,'FROM advertiser_users')) {
             $this->rows=($p[0]===7 && $p[1]===9) || ($p[0]===8 && $p[1]===10) ? [['id'=>$p[0]]] : [];
         } elseif (str_starts_with($this->sql,'SELECT id, name')) {
             if (!str_contains($this->sql,'advertiser_id = ?')) throw new RuntimeException('Unscoped read');
@@ -61,7 +75,7 @@ $conn=new CampaignConnection();
 '''
 ROUTER='''<?php
 $path=parse_url($_SERVER['REQUEST_URI'],PHP_URL_PATH);
-if($path!=='/campaign_edit.php') return false;
+if(!in_array($path,['/campaign_edit.php','/advertiser_dashboard.php'],true)) return false;
 session_start();
 if(isset($_GET['_as'])) {
     $_SESSION=[];
@@ -69,13 +83,13 @@ if(isset($_GET['_as'])) {
     if($_GET['_as']==='staff') $_SESSION=['adv_user_id'=>11,'adv_advertiser_id'=>9];
     if($_GET['_as']==='foreign') $_SESSION=['adv_user_id'=>8,'adv_advertiser_id'=>10];
 }
-session_write_close(); require __DIR__.'/campaign_edit.php';
+session_write_close(); require __DIR__.$path;
 '''
 
 def main():
     with tempfile.TemporaryDirectory(prefix='activbuds-campaigns-') as folder:
         root=Path(folder)
-        for name in ('campaign_edit.php','includes/campaigns.php','includes/header.php',
+        for name in ('campaign_edit.php','advertiser_dashboard.php','includes/campaigns.php','includes/header.php',
                      'includes/footer.php','assets/campaigns.css','assets/campaigns.js'):
             dest=root/name; dest.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(ROOT/name,dest)
@@ -143,6 +157,19 @@ def main():
                 assert req('/campaign_edit.php?id=1',{**valid,'revision':token(html,'revision')})[0]==409
                 assert req('/campaign_edit.php?id[]=2')[0]==404
                 assert len(json.loads(data.read_text()))==2
+                status,_,html=req('/advertiser_dashboard.php')
+                assert status==200 and 'Updated campaign' in html and 'Active campaign' in html and '$1.25' in html
+                status,_,html=req('/advertiser_dashboard.php?filter=draft&q=Updated')
+                assert status==200 and 'Updated campaign' in html and 'Active campaign' not in html
+                assert 'Edit draft' in html and 'campaign_edit.php?id=2' in html
+                status,_,html=req('/advertiser_dashboard.php?q=%25')
+                assert status==200 and 'No matching campaigns' in html
+                status,_,html=req('/advertiser_dashboard.php?_metrics=missing')
+                assert status==200 and 'metrics are currently unavailable' in html and 'Updated campaign' in html
+                status,_,html=req('/advertiser_dashboard.php',client='foreign')
+                assert status==200 and 'Your first campaign starts here' in html and 'Updated campaign' not in html
+                status,_,html=req('/advertiser_dashboard.php',client='staff')
+                assert status==200 and 'Ask the owner' in html and 'Edit draft' not in html
                 print(f'PASS {checks} actual HTTP requests: create/reopen/edit/no-change, CSRF, '
                       'validation, stale draft, active refusal and advertiser isolation; synthetic DB only',flush=True)
                 if '--preview' in sys.argv:

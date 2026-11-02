@@ -72,7 +72,7 @@ if ($raw_id !== null && (!is_string($raw_id)
 $editable = $available && (!$campaign || $campaign['status'] === 'draft');
 require __DIR__.'/includes/header.php';
 ?>
-<link rel="stylesheet" href="assets/campaigns.css?v=drafts-1">
+<link rel="stylesheet" href="assets/campaigns.css?v=drafts-2">
 <div class="campaign-workspace">
   <aside class="campaign-sidebar" aria-label="Advertiser navigation">
     <p class="campaign-eyebrow">Advertiser workspace</p>
