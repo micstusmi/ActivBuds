@@ -92,7 +92,7 @@ try {
 $owner = isset($member) && ($member['role'] ?? '') === 'owner';
 require __DIR__.'/includes/header.php';
 ?>
-<link rel="stylesheet" href="assets/campaigns.css?v=drafts-4">
+<link rel="stylesheet" href="assets/campaigns.css?v=drafts-5">
 <div class="campaign-workspace">
   <aside class="campaign-sidebar" aria-label="Advertiser navigation">
     <p class="campaign-eyebrow">Advertiser workspace</p>

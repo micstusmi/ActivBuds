@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS ad_campaigns (
     name VARCHAR(160) NOT NULL,
     status VARCHAR(24) NOT NULL DEFAULT 'draft',
     target_radius_km INT NOT NULL,
+    location_id INT NULL DEFAULT NULL,
     media_type VARCHAR(24) NOT NULL,
     headline VARCHAR(90) NOT NULL DEFAULT '',
     message VARCHAR(500) NOT NULL DEFAULT '',

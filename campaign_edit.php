@@ -13,8 +13,9 @@ $errors = [];
 $campaign = null;
 $available = false;
 $saved = false;
+$locations = [];
 $values = ['name'=>'', 'target_radius_km'=>'10', 'media_type'=>'image',
-    'headline'=>'', 'message'=>'', 'destination_url'=>''];
+    'headline'=>'', 'message'=>'', 'destination_url'=>'', 'location_id'=>null];
 if (!isset($_SESSION['campaign_csrf']) || !is_string($_SESSION['campaign_csrf'])) {
     $_SESSION['campaign_csrf'] = bin2hex(random_bytes(32));
 }
@@ -29,6 +30,7 @@ if ($raw_id !== null && (!is_string($raw_id)
         if (!campaign_owner($conn, $user, $advertiser)) {
             http_response_code(403); $problem = 'Only an active owner can manage campaigns for this advertiser.';
         } else {
+            $locations = campaign_locations($conn, $advertiser);
             $campaign = $id ? campaign_find($conn, $advertiser, $id) : null;
             if ($id && !$campaign) {
                 http_response_code(404); $problem = 'This campaign is not available.';
@@ -37,6 +39,10 @@ if ($raw_id !== null && (!is_string($raw_id)
                 if ($campaign) $values = $campaign;
                 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     [$values, $errors] = campaign_input($_POST);
+                    if ($values['location_id'] !== null && !in_array($values['location_id'],
+                        array_map(static fn($location)=>(int)$location['id'], $locations), true)) {
+                        $errors['location_id'] = 'That location is no longer available. Choose one of your saved locations, or choose later.';
+                    }
                     $csrf = $_POST['csrf_token'] ?? null;
                     if (!is_string($csrf) || !hash_equals($_SESSION['campaign_csrf'], $csrf)) {
                         http_response_code(403); $problem = 'This form has expired. Reload the page before saving.';
@@ -71,9 +77,16 @@ if ($raw_id !== null && (!is_string($raw_id)
     }
 }
 $editable = $available && (!$campaign || $campaign['status'] === 'draft');
+$location_label = $values['location_id'] === null ? 'Choose later' : 'Location unavailable';
+foreach ($locations as $location) {
+    if ((int)$location['id'] === (int)$values['location_id']) {
+        $location_label = $location['name'];
+        break;
+    }
+}
 require __DIR__.'/includes/header.php';
 ?>
-<link rel="stylesheet" href="assets/campaigns.css?v=drafts-4">
+<link rel="stylesheet" href="assets/campaigns.css?v=drafts-5">
 <div class="campaign-workspace">
   <aside class="campaign-sidebar" aria-label="Advertiser navigation">
     <p class="campaign-eyebrow">Advertiser workspace</p>
@@ -104,9 +117,19 @@ require __DIR__.'/includes/header.php';
             <label for="campaign-name">Campaign name</label>
             <input id="campaign-name" name="name" type="text" maxlength="160" required value="<?= campaign_escape($values['name']) ?>" placeholder="e.g. Summer training sessions" <?= isset($errors['name']) ? 'aria-invalid="true" aria-describedby="name-error"' : '' ?>>
             <?php if (isset($errors['name'])): ?><p id="name-error" class="campaign-field-error"><?= campaign_escape($errors['name']) ?></p><?php endif; ?>
+            <label for="campaign-location">Venue / advertiser location</label>
+            <select id="campaign-location" name="location_id" aria-describedby="location-help<?= isset($errors['location_id']) ? ' location-error' : '' ?>" <?= isset($errors['location_id']) ? 'aria-invalid="true"' : '' ?>>
+              <option value="">Choose later</option>
+              <?php if ($location_label === 'Location unavailable'): ?><option value="<?= (int)$values['location_id'] ?>" selected disabled>Location no longer available — choose another</option><?php endif; ?>
+              <?php foreach ($locations as $location): ?>
+              <option value="<?= (int)$location['id'] ?>" <?= (int)$values['location_id'] === (int)$location['id'] ? 'selected' : '' ?>><?= campaign_escape($location['name'].(empty($location['city']) ? '' : ' · '.$location['city'])) ?></option>
+              <?php endforeach; ?>
+            </select>
+            <p id="location-help" class="campaign-muted"><?= $locations ? 'Select from your saved advertiser locations, or leave this for later.' : 'No saved locations are available. You can still save your draft and choose a location later.' ?></p>
+            <?php if (isset($errors['location_id'])): ?><p id="location-error" class="campaign-field-error"><?= campaign_escape($errors['location_id']) ?></p><?php endif; ?>
             <label for="campaign-radius">Planned targeting radius (km)</label>
             <input id="campaign-radius" name="target_radius_km" type="number" min="1" max="250" step="1" required value="<?= campaign_escape($values['target_radius_km']) ?>" aria-describedby="radius-help<?= isset($errors['target_radius_km']) ? ' radius-error' : '' ?>" <?= isset($errors['target_radius_km']) ? 'aria-invalid="true"' : '' ?>>
-            <p id="radius-help" class="campaign-muted">Draft preference only. A radius does not choose a venue or start location-based delivery.</p>
+            <p id="radius-help" class="campaign-muted">Your planned radius around the selected location. Saving this plan does not geocode the address or start location-based delivery.</p>
             <?php if (isset($errors['target_radius_km'])): ?><p id="radius-error" class="campaign-field-error"><?= campaign_escape($errors['target_radius_km']) ?></p><?php endif; ?>
             <label for="campaign-media">Planned format</label>
             <select id="campaign-media" name="media_type" <?= isset($errors['media_type']) ? 'aria-invalid="true" aria-describedby="media-error"' : '' ?>>
@@ -143,7 +166,8 @@ require __DIR__.'/includes/header.php';
             <span class="campaign-destination" data-preview-destination><?= campaign_escape($values['destination_url'] ?: 'Your destination website') ?></span>
           </div>
         </div>
-        <dl><dt>Format</dt><dd data-preview-media><?= campaign_escape($values['media_type']) ?></dd>
+        <dl><dt>Venue</dt><dd data-preview-location><?= campaign_escape($location_label) ?></dd>
+          <dt>Format</dt><dd data-preview-media><?= campaign_escape($values['media_type']) ?></dd>
           <dt>Planned radius</dt><dd><span data-preview-radius><?= campaign_escape($values['target_radius_km']) ?></span> km</dd>
           <dt>Delivery</dt><dd>Not running</dd></dl>
         <p>This is a draft text layout, not a live advertisement, final placement or price quote.</p>
@@ -151,12 +175,12 @@ require __DIR__.'/includes/header.php';
     </div>
     <?php endif; ?>
     <details id="campaign-help" class="campaign-panel"><summary>Help with campaign drafts</summary>
-      <p>Save a name, planned radius and format, then reopen the draft from “Your campaigns” on the dashboard. Only the advertiser’s current active owner can save changes.</p>
+      <p>Save a name, venue, planned radius, format and promotion text, then reopen the draft from “Your campaigns” on the dashboard. You can leave the venue for later. Only the advertiser’s current active owner can save changes.</p>
       <p>Saving does not publish an ad, reserve placement or charge you. Pricing, venue selection, uploads and delivery will be separate steps when available.</p>
       <p>If another tab changes the draft, reload before saving. If a save is interrupted, check your dashboard before creating another draft.</p>
     </details>
     <footer class="campaign-page-footer"><a href="advertiser_dashboard.php">Advertiser dashboard</a><span>Campaign planning · Drafts only</span></footer>
   </main>
 </div>
-<script src="assets/campaigns.js?v=drafts-2" defer></script>
+<script src="assets/campaigns.js?v=drafts-3" defer></script>
 <?php require __DIR__.'/includes/footer.php'; ?>

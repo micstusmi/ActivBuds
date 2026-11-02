@@ -26,11 +26,16 @@ class CampaignStatement {
     private $sql; private $params=[]; private $rows=[];
     public $insert_id=0; public $affected_rows=0;
     function __construct($sql) {$this->sql=$sql;}
-    function bind_param($types,&...$values) {$this->params=&$values;}
+    function bind_param($types,&...$values) {if(strlen($types)!==count($values)) throw new RuntimeException('Bind signature mismatch'); $this->params=&$values;}
     function execute() {
         $file=getenv('CAMPAIGN_FIXTURE_DATA');
         $data=json_decode(file_get_contents($file),true); $p=$this->params;
-        if (str_starts_with($this->sql,'SELECT role FROM advertiser_users')) {
+        if (str_starts_with($this->sql,'SELECT id, name, city')) {
+            $all=[['id'=>10,'advertiser_id'=>9,'name'=>'Main Studio','city'=>'Oakleigh','state'=>'VIC','country'=>'Australia'],
+                  ['id'=>11,'advertiser_id'=>9,'name'=>'Outdoor Club','city'=>'Pakenham','state'=>'VIC','country'=>'Australia'],
+                  ['id'=>99,'advertiser_id'=>10,'name'=>'Other advertiser venue','city'=>'Synthetic','state'=>'VIC','country'=>'Australia']];
+            $this->rows=array_values(array_filter($all,fn($r)=>$r['advertiser_id']===$p[0]));
+        } elseif (str_starts_with($this->sql,'SELECT role FROM advertiser_users')) {
             $valid=($p[0]===7 && $p[1]===9) || ($p[0]===8 && $p[1]===10) || ($p[0]===11 && $p[1]===9);
             $this->rows=$valid ? [['role'=>$p[0]===11 ? 'staff' : 'owner']] : [];
         } elseif (str_contains($this->sql,'SUM(impressions)')) {
@@ -51,10 +56,11 @@ class CampaignStatement {
             $r=$data[(string)$p[0]] ?? null;
             $this->rows=$r && $r['advertiser_id']===$p[1] ? [$r] : [];
         } elseif (str_starts_with($this->sql,'INSERT INTO ad_campaigns')) {
+            if($p[7]!==null && !(($p[10]===9 && in_array($p[9],[10,11],true)) || ($p[10]===10 && $p[9]===99))) return true;
             $this->insert_id=max(array_map('intval',array_keys($data)))+1;
             $data[(string)$this->insert_id]=['id'=>$this->insert_id,'advertiser_id'=>$p[0],
                 'name'=>$p[1],'status'=>'draft','target_radius_km'=>$p[2],'media_type'=>$p[3],
-                'headline'=>$p[4],'message'=>$p[5],'destination_url'=>$p[6]];
+                'headline'=>$p[4],'message'=>$p[5],'destination_url'=>$p[6],'location_id'=>$p[7]];
             file_put_contents($file,json_encode($data));
         } elseif (str_starts_with($this->sql,'UPDATE ad_campaigns SET status')) {
             $r=$data[(string)$p[1]] ?? null;
@@ -64,13 +70,15 @@ class CampaignStatement {
             }
         } elseif (str_starts_with($this->sql,'UPDATE ad_campaigns')) {
             if (!str_contains($this->sql,"advertiser_id = ? AND status = 'draft'")) throw new RuntimeException('Unscoped update');
-            $r=$data[(string)$p[6]] ?? null;
-            if ($r && $r['advertiser_id']===$p[7] && $r['status']==='draft'
-                && $r['name']===$p[8] && $r['target_radius_km']===$p[9] && $r['media_type']===$p[10]
-                && $r['headline']===$p[11] && $r['message']===$p[12] && $r['destination_url']===$p[13]) {
+            $r=$data[(string)$p[7]] ?? null;
+            if ($r && $r['advertiser_id']===$p[8] && $r['status']==='draft'
+                && $r['name']===$p[9] && $r['target_radius_km']===$p[10] && $r['media_type']===$p[11]
+                && $r['headline']===$p[12] && $r['message']===$p[13] && $r['destination_url']===$p[14]
+                && $r['location_id']===$p[15]
+                && ($p[16]===null || ($p[18]===9 && in_array($p[17],[10,11],true)) || ($p[18]===10 && $p[17]===99))) {
                 $next=array_replace($r,['name'=>$p[0],'target_radius_km'=>$p[1],'media_type'=>$p[2],
-                    'headline'=>$p[3],'message'=>$p[4],'destination_url'=>$p[5]]);
-                $this->affected_rows=$next===$r ? 0 : 1; $data[(string)$p[6]]=$next;
+                    'headline'=>$p[3],'message'=>$p[4],'destination_url'=>$p[5],'location_id'=>$p[6]]);
+                $this->affected_rows=$next===$r ? 0 : 1; $data[(string)$p[7]]=$next;
                 file_put_contents($file,json_encode($data));
             }
         } else throw new RuntimeException('Unexpected fixture SQL');
@@ -108,7 +116,7 @@ def main():
         data=root/'data.json'
         data.write_text(json.dumps({'1':{'id':1,'advertiser_id':9,'name':'Active campaign',
             'status':'active','target_radius_km':10,'media_type':'image',
-            'headline':'','message':'','destination_url':''}}))
+            'headline':'','message':'','destination_url':'','location_id':None}}))
         with socket.socket() as s:
             s.bind(('127.0.0.1',0)); port=s.getsockname()[1]
         with (root/'server.log').open('w+') as log:
@@ -147,17 +155,20 @@ def main():
                 csrf=token(html,'csrf_token')
                 valid={'name':'Summer <training>','target_radius_km':'25','media_type':'carousel','csrf_token':csrf,
                     'headline':'Try <outdoor> training','message':'Meet your next training partner.',
-                    'destination_url':'https://example.test/training'}
+                    'destination_url':'https://example.test/training','location_id':'10'}
                 assert req('/campaign_edit.php',{**valid,'csrf_token':'wrong'})[0]==403
                 assert req('/campaign_edit.php',{**valid,'target_radius_km':'0'})[0]==422
                 assert req('/campaign_edit.php',{**valid,'destination_url':'javascript:alert(1)'})[0]==422
                 assert req('/campaign_edit.php',{**valid,'destination_url':'https://user:pass@example.test/'})[0]==422
                 assert req('/campaign_edit.php',{**valid,'headline':'x'*91})[0]==422
+                assert req('/campaign_edit.php',{**valid,'location_id':'99'})[0]==422
                 assert len(json.loads(data.read_text()))==1
                 status,location,_=req('/campaign_edit.php',valid)
                 assert status==303 and location=='campaign_edit.php?id=2'
                 status,_,html=req('/'+location)
                 assert status==200 and 'Draft saved.' in html and 'Summer &lt;training&gt;' in html
+                assert 'Main Studio' in html and 'Other advertiser venue' not in html
+                assert json.loads(data.read_text())['2']['location_id']==10
                 assert 'Try &lt;outdoor&gt; training' in html and 'Meet your next training partner.' in html
                 assert json.loads(data.read_text())['2']['destination_url']=='https://example.test/training'
                 revision=token(html,'revision')
@@ -212,6 +223,14 @@ def main():
                 assert duplicate['status']=='draft' and duplicate['advertiser_id']==9
                 assert duplicate['name']=='Active campaign (copy)'
                 assert json.loads(data.read_text())['1']['status']=='active'
+                _,_,html=req('/campaign_edit.php?id=2')
+                revision=token(html,'revision')
+                assert req('/campaign_edit.php?id=2',{**valid,'name':'Updated campaign','location_id':'11','revision':revision})[0]==303
+                assert json.loads(data.read_text())['2']['location_id']==11
+                _,_,html=req('/campaign_edit.php?id=2')
+                revision=token(html,'revision')
+                assert req('/campaign_edit.php?id=2',{**valid,'name':'Updated campaign','location_id':'','revision':revision})[0]==303
+                assert json.loads(data.read_text())['2']['location_id'] is None
                 print(f'PASS {checks} actual HTTP requests: create/reopen/edit/no-change, CSRF, '
                       'validation, stale draft, active refusal and advertiser isolation; synthetic DB only',flush=True)
                 if '--preview' in sys.argv:

@@ -28,7 +28,8 @@ should be reconciled from the library before another copy is requested.
 
 1. Sign in as an active advertiser owner and choose **Create new campaign** from
    the existing dashboard.
-2. Enter a name, a planned whole-number radius of 1–250 km, and image/carousel/video.
+2. Enter a name, choose an existing advertiser venue (or choose later), a planned
+   whole-number radius of 1–250 km, and image/carousel/video.
 3. Optionally write a headline (90 characters), message (500 characters) and full
    HTTPS destination. Inspect the live draft text layout and choose **Save draft**.
 4. Reopen the saved campaign from the dashboard's existing **View / Edit** link.
@@ -46,6 +47,13 @@ Headline, message and destination are included in that revision and comparison,
 so a stale content edit is also refused. Text is escaped on server rendering and
 updated with textContent in the browser. The destination is plain preview text,
 not a fetched/clickable URL. Non-HTTPS URLs and embedded credentials are refused.
+The optional saved location ID is included in revision/CAS too. Location options
+come only from the session advertiser's existing advertiser_locations rows.
+Foreign/unavailable IDs are refused; INSERT/UPDATE also check owned-location
+existence in the same SQL statement. A no-change save rechecks location ownership
+before confirming. Duplication retains a valid owned selection. A removed or
+unavailable venue is shown explicitly rather than replaced with another venue.
+No location records are created, geocoded or sent to a map/provider here.
 
 ## What is deliberately not activated
 
@@ -62,7 +70,8 @@ this patch does not invent a new logo/favicon or claim shared Suite sign-in.
 discovery or upgrade script. It creates only `ad_campaigns`; existing advertiser
 accounts and locations are prerequisites. No migration is applied by browsing
 the page. No data is dropped or rewritten by the SQL file.
-The still-unapplied baseline now includes headline/message/destination_url. An
+The still-unapplied baseline now includes headline/message/destination_url and
+nullable location_id. An
 existing database, including an earlier prototype baseline, needs explicit
 column/default reconciliation before this revision; the editor does not perform
 implicit ALTERs. This is source preparation, not an installed schema migration.
@@ -79,7 +88,7 @@ assuming the fresh baseline is compatible. Native MySQL save/update and concurre
 write checks on that actual schema remain required before deployment.
 
 Install the editor, helper and two assets together. Asset loaders are versioned
-CSS `drafts-4` and JavaScript `drafts-2`; advance each changed asset's references
+CSS `drafts-5` and JavaScript `drafts-3`; advance each changed asset's references
 for later revisions. Retain the current
 shared header/footer. Back up replaced source and database before approved
 schema work. Recovery restores the prior source; preserve campaign drafts and
@@ -98,7 +107,8 @@ The connected dashboard checks include campaign search/draft filter, literal
 wildcard search, read-only staff, foreign advertiser empty state and missing
 metrics recovery. Creative persistence/escaped rendering, unsafe/credentialed
 destination refusal and headline bounds, plus archive/restore/duplicate and
-their cross-owner/staff/CSRF/state controls extend the suite to 35 HTTP requests
+their cross-owner/staff/CSRF/state controls, plus owned venue persistence/change,
+foreign venue refusal and choose-later behavior extend the suite to 40 HTTP requests
 with its synthetic data collaborator. The directly affected existing 10-case
 advertiser HTTP fixture and real PHP session/CSRF/credential fixture also pass;
 their test copies now include the dashboard helper and membership response.
