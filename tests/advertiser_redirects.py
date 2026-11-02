@@ -3,6 +3,7 @@
 import contextlib
 import http.client
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -49,7 +50,7 @@ ROUTER = '''<?php
 $path=parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $allowed=['/advertiser_login.php','/advertiser_register.php','/advertiser_dashboard.php'];
 if (!in_array($path,$allowed,true)) {http_response_code(404); exit;}
-session_start(); $_SESSION=[];
+session_start();
 if (($_GET['_fixture'] ?? '') === 'signed-in') {
     $_SESSION=['adv_user_id'=>7,'adv_advertiser_id'=>9,'adv_user_name'=>'Fixture',
               'adv_advertiser_name'=>'Synthetic venue'];
@@ -96,9 +97,15 @@ def main():
                         path += '?_fixture=signed-in'
                     conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
                     try:
+                        headers={'Content-Type':'application/x-www-form-urlencoded'}
+                        if fields is not None and path.startswith('/advertiser_login.php'):
+                            conn.request('GET','/advertiser_login.php')
+                            form=conn.getresponse()
+                            html=form.read().decode()
+                            headers['Cookie']=form.getheader('Set-Cookie').split(';',1)[0]
+                            fields={**fields,'csrf_token':re.search(r'name="csrf_token" value="([a-f0-9]+)"',html).group(1)}
                         conn.request('POST' if fields is not None else 'GET', path,
-                            urlencode(fields) if fields is not None else None,
-                            {'Content-Type':'application/x-www-form-urlencoded'})
+                            urlencode(fields) if fields is not None else None,headers)
                         response = conn.getresponse()
                         body = response.read().decode()
                         assert not any(x in body for x in ('Warning:', 'Fatal error:', 'Notice:')), body
@@ -144,3 +151,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

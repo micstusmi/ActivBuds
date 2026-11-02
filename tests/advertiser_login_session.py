@@ -3,6 +3,7 @@
 import http.client
 from http.cookies import SimpleCookie
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -46,17 +47,25 @@ def main():
                 else:
                     raise AssertionError('PHP server did not become ready')
 
-                def request(path, cookie=None, password=None):
+                last_csrf=None
+                def request(path, cookie=None, password=None, token='automatic', fields=None):
+                    nonlocal last_csrf
                     conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
                     headers = {'Content-Type':'application/x-www-form-urlencoded'}
                     if cookie:
                         headers['Cookie'] = 'PHPSESSID=' + cookie
                     try:
-                        conn.request('POST' if password is not None else 'GET', path,
-                            urlencode({'email':'fixture@example.test','password':password})
-                                if password is not None else None, headers)
+                        form=fields if fields is not None else {'email':'fixture@example.test','password':password}
+                        is_post=fields is not None or password is not None
+                        if is_post and token is not None:
+                            form={**form,'csrf_token':last_csrf if token == 'automatic' else token}
+                        conn.request('POST' if is_post else 'GET',path,
+                            urlencode(form) if is_post else None,headers)
                         reply = conn.getresponse()
                         body = reply.read().decode()
+                        match=re.search(r'name="csrf_token" value="([a-f0-9]+)"',body)
+                        if match:
+                            last_csrf=match.group(1)
                         assert '<b>Warning</b>' not in body and '<b>Fatal error</b>' not in body
                         cookies = SimpleCookie()
                         for key, value in reply.getheaders():
@@ -69,6 +78,17 @@ def main():
 
                 status, _, _, anonymous = request('/advertiser_login.php')
                 assert status == 200 and anonymous
+                for bad_token in (None, 'wrong-token'):
+                    status, location, body, _ = request('/advertiser_login.php', anonymous,
+                        'fixture-password',token=bad_token)
+                    assert status == 403 and location is None and 'form has expired' in body
+                for malformed in ({'email[]':'fixture@example.test','password':'fixture-password'},
+                                  {'email':'fixture@example.test','password[]':'fixture-password'}):
+                    status, location, body, _=request('/advertiser_login.php',anonymous,fields=malformed)
+                    assert status == 400 and location is None and 'Invalid email or password.' in body
+                # Rejected requests must never establish workspace access.
+                status, location, _, _=request('/advertiser_dashboard.php',anonymous)
+                assert status == 302 and location == 'advertiser_login.php'
                 status, _, body, failed_id = request('/advertiser_login.php', anonymous, 'wrong')
                 assert status == 200 and 'Invalid email or password.' in body
                 assert failed_id == anonymous
@@ -94,7 +114,7 @@ def main():
                 assert unchanged == throttled
                 status, location, _, _ = request('/advertiser_dashboard.php', throttled)
                 assert status == 302 and location == 'advertiser_login.php'
-                print('PASS: real PHP cookie rotation, old-ID deletion/replay refusal, new-ID access, '
+                print('PASS: forged/missing CSRF and malformed credential refusal; real PHP cookie rotation, old-ID deletion/replay refusal, new-ID access, '
                       'invalid-password and five-attempt throttle controls; synthetic DB only')
             finally:
                 server.terminate()
@@ -106,3 +126,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
