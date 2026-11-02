@@ -53,15 +53,18 @@ class CampaignStatement {
         } elseif (str_starts_with($this->sql,'INSERT INTO ad_campaigns')) {
             $this->insert_id=max(array_map('intval',array_keys($data)))+1;
             $data[(string)$this->insert_id]=['id'=>$this->insert_id,'advertiser_id'=>$p[0],
-                'name'=>$p[1],'status'=>'draft','target_radius_km'=>$p[2],'media_type'=>$p[3]];
+                'name'=>$p[1],'status'=>'draft','target_radius_km'=>$p[2],'media_type'=>$p[3],
+                'headline'=>$p[4],'message'=>$p[5],'destination_url'=>$p[6]];
             file_put_contents($file,json_encode($data));
         } elseif (str_starts_with($this->sql,'UPDATE ad_campaigns')) {
             if (!str_contains($this->sql,"advertiser_id = ? AND status = 'draft'")) throw new RuntimeException('Unscoped update');
-            $r=$data[(string)$p[3]] ?? null;
-            if ($r && $r['advertiser_id']===$p[4] && $r['status']==='draft'
-                && $r['name']===$p[5] && $r['target_radius_km']===$p[6] && $r['media_type']===$p[7]) {
-                $next=array_replace($r,['name'=>$p[0],'target_radius_km'=>$p[1],'media_type'=>$p[2]]);
-                $this->affected_rows=$next===$r ? 0 : 1; $data[(string)$p[3]]=$next;
+            $r=$data[(string)$p[6]] ?? null;
+            if ($r && $r['advertiser_id']===$p[7] && $r['status']==='draft'
+                && $r['name']===$p[8] && $r['target_radius_km']===$p[9] && $r['media_type']===$p[10]
+                && $r['headline']===$p[11] && $r['message']===$p[12] && $r['destination_url']===$p[13]) {
+                $next=array_replace($r,['name'=>$p[0],'target_radius_km'=>$p[1],'media_type'=>$p[2],
+                    'headline'=>$p[3],'message'=>$p[4],'destination_url'=>$p[5]]);
+                $this->affected_rows=$next===$r ? 0 : 1; $data[(string)$p[6]]=$next;
                 file_put_contents($file,json_encode($data));
             }
         } else throw new RuntimeException('Unexpected fixture SQL');
@@ -98,7 +101,8 @@ def main():
         (root/'sessions').mkdir()
         data=root/'data.json'
         data.write_text(json.dumps({'1':{'id':1,'advertiser_id':9,'name':'Active campaign',
-            'status':'active','target_radius_km':10,'media_type':'image'}}))
+            'status':'active','target_radius_km':10,'media_type':'image',
+            'headline':'','message':'','destination_url':''}}))
         with socket.socket() as s:
             s.bind(('127.0.0.1',0)); port=s.getsockname()[1]
         with (root/'server.log').open('w+') as log:
@@ -135,14 +139,21 @@ def main():
                 status,_,html=req('/campaign_edit.php?_as=owner')
                 assert status==200 and 'Create a campaign' in html
                 csrf=token(html,'csrf_token')
-                valid={'name':'Summer <training>','target_radius_km':'25','media_type':'carousel','csrf_token':csrf}
+                valid={'name':'Summer <training>','target_radius_km':'25','media_type':'carousel','csrf_token':csrf,
+                    'headline':'Try <outdoor> training','message':'Meet your next training partner.',
+                    'destination_url':'https://example.test/training'}
                 assert req('/campaign_edit.php',{**valid,'csrf_token':'wrong'})[0]==403
                 assert req('/campaign_edit.php',{**valid,'target_radius_km':'0'})[0]==422
+                assert req('/campaign_edit.php',{**valid,'destination_url':'javascript:alert(1)'})[0]==422
+                assert req('/campaign_edit.php',{**valid,'destination_url':'https://user:pass@example.test/'})[0]==422
+                assert req('/campaign_edit.php',{**valid,'headline':'x'*91})[0]==422
                 assert len(json.loads(data.read_text()))==1
                 status,location,_=req('/campaign_edit.php',valid)
                 assert status==303 and location=='campaign_edit.php?id=2'
                 status,_,html=req('/'+location)
                 assert status==200 and 'Draft saved.' in html and 'Summer &lt;training&gt;' in html
+                assert 'Try &lt;outdoor&gt; training' in html and 'Meet your next training partner.' in html
+                assert json.loads(data.read_text())['2']['destination_url']=='https://example.test/training'
                 revision=token(html,'revision')
                 assert req('/campaign_edit.php?id=2',{**valid,'revision':revision,'name':'Updated campaign'})[0]==303
                 assert json.loads(data.read_text())['2']['name']=='Updated campaign'

@@ -8,7 +8,8 @@ function campaign_escape($value): string {
 function campaign_revision(array $campaign): string {
     return hash('sha256', json_encode([(int)$campaign['id'], (string)$campaign['name'],
         (string)$campaign['status'], (int)$campaign['target_radius_km'],
-        (string)$campaign['media_type']], JSON_THROW_ON_ERROR));
+        (string)$campaign['media_type'], (string)($campaign['headline'] ?? ''),
+        (string)($campaign['message'] ?? ''), (string)($campaign['destination_url'] ?? '')], JSON_THROW_ON_ERROR));
 }
 
 function campaign_input(array $input): array {
@@ -16,6 +17,24 @@ function campaign_input(array $input): array {
     $name = is_string($input['name'] ?? null) ? trim($input['name']) : '';
     $radius = is_string($input['target_radius_km'] ?? null) ? $input['target_radius_km'] : '';
     $media = is_string($input['media_type'] ?? null) ? $input['media_type'] : '';
+    $creative = [];
+    foreach (['headline'=>90, 'message'=>500, 'destination_url'=>2048] as $field=>$limit) {
+        $creative[$field] = is_string($input[$field] ?? null) ? trim($input[$field]) : '';
+        if (isset($input[$field]) && !is_string($input[$field])) {
+            $errors[$field] = 'Enter text for this field.';
+        } elseif ($creative[$field] !== '' && (preg_match('/^.{1,'.$limit.'}$/usD', $creative[$field]) !== 1
+            || preg_match('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/', $creative[$field]))) {
+            $errors[$field] = 'Use no more than '.$limit.' characters without control characters.';
+        }
+    }
+    if ($creative['destination_url'] !== '') {
+        $url = parse_url($creative['destination_url']);
+        if (!filter_var($creative['destination_url'], FILTER_VALIDATE_URL) || !$url
+            || strtolower($url['scheme'] ?? '') !== 'https' || empty($url['host'])
+            || isset($url['user']) || isset($url['pass'])) {
+            $errors['destination_url'] = 'Enter a full HTTPS website address without a username or password.';
+        }
+    }
     if (preg_match('/^.{1,160}$/usD', $name) !== 1 || preg_match('/[\x00-\x1f\x7f]/', $name)) {
         $errors['name'] = 'Enter a campaign name of up to 160 characters without control characters.';
     }
@@ -25,7 +44,7 @@ function campaign_input(array $input): array {
     if (!in_array($media, ['image', 'carousel', 'video'], true)) {
         $errors['media_type'] = 'Choose an image, carousel or video draft.';
     }
-    return [['name'=>$name, 'target_radius_km'=>$radius, 'media_type'=>$media], $errors];
+    return [array_merge(['name'=>$name, 'target_radius_km'=>$radius, 'media_type'=>$media], $creative), $errors];
 }
 
 function campaign_owner($db, int $user, int $advertiser): bool {
@@ -55,7 +74,7 @@ function campaign_list($db, int $advertiser, string $search, bool $draft_only): 
 }
 
 function campaign_find($db, int $advertiser, int $id): ?array {
-    $stmt = $db->prepare('SELECT id, name, status, target_radius_km, media_type
+    $stmt = $db->prepare('SELECT id, name, status, target_radius_km, media_type, headline, message, destination_url
         FROM ad_campaigns WHERE id = ? AND advertiser_id = ? LIMIT 1');
     $stmt->bind_param('ii', $id, $advertiser);
     $stmt->execute();
@@ -66,10 +85,11 @@ function campaign_find($db, int $advertiser, int $id): ?array {
 
 function campaign_create($db, int $advertiser, array $values): int {
     $stmt = $db->prepare("INSERT INTO ad_campaigns
-        (advertiser_id, name, status, target_radius_km, media_type, created_at)
-        VALUES (?, ?, 'draft', ?, ?, CURRENT_TIMESTAMP)");
+        (advertiser_id, name, status, target_radius_km, media_type, headline, message, destination_url, created_at)
+        VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)");
     $radius = (int)$values['target_radius_km'];
-    $stmt->bind_param('isis', $advertiser, $values['name'], $radius, $values['media_type']);
+    $stmt->bind_param('isissss', $advertiser, $values['name'], $radius, $values['media_type'],
+        $values['headline'], $values['message'], $values['destination_url']);
     if (!$stmt->execute()) throw new RuntimeException('Campaign was not saved.');
     $id = (int)$stmt->insert_id;
     $stmt->close();
@@ -78,14 +98,18 @@ function campaign_create($db, int $advertiser, array $values): int {
 }
 
 function campaign_update($db, int $advertiser, array $before, array $values): bool {
-    $stmt = $db->prepare("UPDATE ad_campaigns SET name = ?, target_radius_km = ?, media_type = ?
+    $stmt = $db->prepare("UPDATE ad_campaigns SET name = ?, target_radius_km = ?, media_type = ?,
+        headline = ?, message = ?, destination_url = ?
         WHERE id = ? AND advertiser_id = ? AND status = 'draft'
-        AND BINARY name = BINARY ? AND target_radius_km = ? AND BINARY media_type = BINARY ?");
+        AND BINARY name = BINARY ? AND target_radius_km = ? AND BINARY media_type = BINARY ?
+        AND BINARY headline = BINARY ? AND BINARY message = BINARY ? AND BINARY destination_url = BINARY ?");
     $radius = (int)$values['target_radius_km'];
     $id = (int)$before['id'];
     $old_radius = (int)$before['target_radius_km'];
-    $stmt->bind_param('sisiisis', $values['name'], $radius, $values['media_type'],
-        $id, $advertiser, $before['name'], $old_radius, $before['media_type']);
+    $stmt->bind_param('sissssiisissss', $values['name'], $radius, $values['media_type'],
+        $values['headline'], $values['message'], $values['destination_url'],
+        $id, $advertiser, $before['name'], $old_radius, $before['media_type'],
+        $before['headline'], $before['message'], $before['destination_url']);
     if (!$stmt->execute()) throw new RuntimeException('Campaign was not saved.');
     $changed = $stmt->affected_rows === 1;
     $stmt->close();
@@ -96,5 +120,8 @@ function campaign_update($db, int $advertiser, array $before, array $values): bo
         && campaign_revision($current) === campaign_revision($before)
         && $current['name'] === $values['name']
         && (int)$current['target_radius_km'] === $radius
-        && $current['media_type'] === $values['media_type'];
+        && $current['media_type'] === $values['media_type']
+        && $current['headline'] === $values['headline']
+        && $current['message'] === $values['message']
+        && $current['destination_url'] === $values['destination_url'];
 }

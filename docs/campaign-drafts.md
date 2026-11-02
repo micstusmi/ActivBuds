@@ -19,7 +19,8 @@ never a fabricated zero.
 1. Sign in as an active advertiser owner and choose **Create new campaign** from
    the existing dashboard.
 2. Enter a name, a planned whole-number radius of 1–250 km, and image/carousel/video.
-3. Inspect the live settings summary and choose **Save draft**.
+3. Optionally write a headline (90 characters), message (500 characters) and full
+   HTTPS destination. Inspect the live draft text layout and choose **Save draft**.
 4. Reopen the saved campaign from the dashboard's existing **View / Edit** link.
 5. Update a draft or save without changes. A stale tab receives a conflict rather
    than overwriting a newer draft. Campaigns outside draft status are read-only.
@@ -31,6 +32,10 @@ advertiser-user query checks active owner membership on each request. Reads and
 writes use the session advertiser ID, never a submitted advertiser ID. CSRF and
 input validation protect saves. The compare-and-update predicate includes the
 previous fields with binary text comparison and draft status.
+Headline, message and destination are included in that revision and comparison,
+so a stale content edit is also refused. Text is escaped on server rendering and
+updated with textContent in the browser. The destination is plain preview text,
+not a fetched/clickable URL. Non-HTTPS URLs and embedded credentials are refused.
 
 ## What is deliberately not activated
 
@@ -47,6 +52,10 @@ this patch does not invent a new logo/favicon or claim shared Suite sign-in.
 discovery or upgrade script. It creates only `ad_campaigns`; existing advertiser
 accounts and locations are prerequisites. No migration is applied by browsing
 the page. No data is dropped or rewritten by the SQL file.
+The still-unapplied baseline now includes headline/message/destination_url. An
+existing database, including an earlier prototype baseline, needs explicit
+column/default reconciliation before this revision; the editor does not perform
+implicit ALTERs. This is source preparation, not an installed schema migration.
 
 Before installing into an existing database, inspect its actual `SHOW CREATE
 TABLE ad_campaigns`, table engine, required columns without defaults, triggers,
@@ -57,7 +66,8 @@ assuming the fresh baseline is compatible. Native MySQL save/update and concurre
 write checks on that actual schema remain required before deployment.
 
 Install the editor, helper and two assets together. Asset loaders are versioned
-`drafts-1`; advance both references for later changed assets. Retain the current
+CSS `drafts-3` and JavaScript `drafts-2`; advance each changed asset's references
+for later revisions. Retain the current
 shared header/footer. Back up replaced source and database before approved
 schema work. Recovery restores the prior source; preserve campaign drafts and
 reconcile an interrupted save before creating another. Do not blindly reverse
@@ -73,7 +83,8 @@ redirect/reopen, escaping, edit/no-change, CSRF/invalid input, stale revision,
 active-campaign refusal, foreign advertiser isolation, staff refusal and bad IDs.
 The connected dashboard checks include campaign search/draft filter, literal
 wildcard search, read-only staff, foreign advertiser empty state and missing
-metrics recovery. The actual controller/helper suite passed 21 HTTP requests
+metrics recovery. Creative persistence/escaped rendering, unsafe/credentialed
+destination refusal and headline bounds extend the suite to 24 HTTP requests
 with its synthetic data collaborator. The directly affected existing 10-case
 advertiser HTTP fixture and real PHP session/CSRF/credential fixture also pass;
 their test copies now include the dashboard helper and membership response.

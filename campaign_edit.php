@@ -13,7 +13,8 @@ $errors = [];
 $campaign = null;
 $available = false;
 $saved = false;
-$values = ['name'=>'', 'target_radius_km'=>'10', 'media_type'=>'image'];
+$values = ['name'=>'', 'target_radius_km'=>'10', 'media_type'=>'image',
+    'headline'=>'', 'message'=>'', 'destination_url'=>''];
 if (!isset($_SESSION['campaign_csrf']) || !is_string($_SESSION['campaign_csrf'])) {
     $_SESSION['campaign_csrf'] = bin2hex(random_bytes(32));
 }
@@ -72,7 +73,7 @@ if ($raw_id !== null && (!is_string($raw_id)
 $editable = $available && (!$campaign || $campaign['status'] === 'draft');
 require __DIR__.'/includes/header.php';
 ?>
-<link rel="stylesheet" href="assets/campaigns.css?v=drafts-2">
+<link rel="stylesheet" href="assets/campaigns.css?v=drafts-3">
 <div class="campaign-workspace">
   <aside class="campaign-sidebar" aria-label="Advertiser navigation">
     <p class="campaign-eyebrow">Advertiser workspace</p>
@@ -115,6 +116,18 @@ require __DIR__.'/includes/header.php';
             </select>
             <?php if (isset($errors['media_type'])): ?><p id="media-error" class="campaign-field-error"><?= campaign_escape($errors['media_type']) ?></p><?php endif; ?>
             <p class="campaign-muted">Choose a format for your plan. Media upload and ad placement are not enabled in this draft editor.</p>
+            <h2 class="campaign-creative-heading">Write your promotion</h2>
+            <p class="campaign-muted">Optional draft content. Nothing is published when you save.</p>
+            <label for="campaign-headline">Headline</label>
+            <input id="campaign-headline" name="headline" maxlength="90" value="<?= campaign_escape($values['headline']) ?>" placeholder="e.g. Find your next training partner" <?= isset($errors['headline']) ? 'aria-invalid="true" aria-describedby="headline-error"' : '' ?>>
+            <?php if (isset($errors['headline'])): ?><p id="headline-error" class="campaign-field-error"><?= campaign_escape($errors['headline']) ?></p><?php endif; ?>
+            <label for="campaign-message">Message</label>
+            <textarea id="campaign-message" name="message" rows="4" maxlength="500" placeholder="Tell people what makes your activity worth trying." <?= isset($errors['message']) ? 'aria-invalid="true" aria-describedby="message-error"' : '' ?>><?= campaign_escape($values['message']) ?></textarea>
+            <?php if (isset($errors['message'])): ?><p id="message-error" class="campaign-field-error"><?= campaign_escape($errors['message']) ?></p><?php endif; ?>
+            <label for="campaign-destination">Destination website</label>
+            <input type="url" id="campaign-destination" name="destination_url" maxlength="2048" value="<?= campaign_escape($values['destination_url']) ?>" placeholder="https://your-website.example" aria-describedby="destination-help<?= isset($errors['destination_url']) ? ' destination-error' : '' ?>" <?= isset($errors['destination_url']) ? 'aria-invalid="true"' : '' ?>>
+            <p id="destination-help" class="campaign-muted">An HTTPS link for your plan. We do not visit it or publish it from this page.</p>
+            <?php if (isset($errors['destination_url'])): ?><p id="destination-error" class="campaign-field-error"><?= campaign_escape($errors['destination_url']) ?></p><?php endif; ?>
             <?php if ($editable): ?><button type="submit" class="campaign-primary">Save draft</button><?php endif; ?>
           </fieldset>
         </form>
@@ -122,10 +135,18 @@ require __DIR__.'/includes/header.php';
       </section>
       <aside class="campaign-panel campaign-preview" aria-labelledby="preview-heading">
         <p class="campaign-eyebrow">Draft summary</p><h2 id="preview-heading" data-preview-name><?= campaign_escape($values['name'] ?: 'Your next promotion') ?></h2>
+        <div class="campaign-ad-preview" aria-label="Draft promotion text preview">
+          <div class="campaign-media-placeholder">Creative space<span>Media upload comes later</span></div>
+          <div class="campaign-ad-copy"><span class="campaign-eyebrow">Promotion draft</span>
+            <h3 data-preview-headline><?= campaign_escape($values['headline'] ?: 'Your headline goes here') ?></h3>
+            <p data-preview-message><?= campaign_escape($values['message'] ?: 'Your promotion message will appear here.') ?></p>
+            <span class="campaign-destination" data-preview-destination><?= campaign_escape($values['destination_url'] ?: 'Your destination website') ?></span>
+          </div>
+        </div>
         <dl><dt>Format</dt><dd data-preview-media><?= campaign_escape($values['media_type']) ?></dd>
           <dt>Planned radius</dt><dd><span data-preview-radius><?= campaign_escape($values['target_radius_km']) ?></span> km</dd>
           <dt>Delivery</dt><dd>Not running</dd></dl>
-        <p>This is a settings summary, not an advertisement preview or a live price quote.</p>
+        <p>This is a draft text layout, not a live advertisement, final placement or price quote.</p>
       </aside>
     </div>
     <?php endif; ?>
@@ -137,5 +158,5 @@ require __DIR__.'/includes/header.php';
     <footer class="campaign-page-footer"><a href="advertiser_dashboard.php">Advertiser dashboard</a><span>Campaign planning · Drafts only</span></footer>
   </main>
 </div>
-<script src="assets/campaigns.js?v=drafts-1" defer></script>
+<script src="assets/campaigns.js?v=drafts-2" defer></script>
 <?php require __DIR__.'/includes/footer.php'; ?>
