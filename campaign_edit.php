@@ -86,7 +86,7 @@ foreach ($locations as $location) {
 }
 require __DIR__.'/includes/header.php';
 ?>
-<link rel="stylesheet" href="assets/campaigns.css?v=drafts-5">
+<link rel="stylesheet" href="assets/campaigns.css?v=drafts-6">
 <div class="campaign-workspace">
   <aside class="campaign-sidebar" aria-label="Advertiser navigation">
     <p class="campaign-eyebrow">Advertiser workspace</p>
@@ -109,7 +109,7 @@ require __DIR__.'/includes/header.php';
       <section class="campaign-panel" aria-labelledby="details-heading">
         <h2 id="details-heading">Campaign details</h2>
         <p class="campaign-muted">Status: <strong><?= campaign_escape($campaign['status'] ?? 'draft') ?></strong></p>
-        <form method="post" action="campaign_edit.php<?= $id ? '?id='.$id : '' ?>" data-campaign-form>
+        <form method="post" action="campaign_edit.php<?= $id ? '?id='.$id : '' ?>" data-campaign-form <?= $_SERVER['REQUEST_METHOD'] === 'POST' ? 'data-unsaved-response' : '' ?>>
           <input type="hidden" name="csrf_token" value="<?= campaign_escape($_SESSION['campaign_csrf']) ?>">
           <?php if ($campaign): ?><input type="hidden" name="revision" value="<?= campaign_revision($campaign) ?>"><?php endif; ?>
           <fieldset <?= !$editable ? 'disabled' : '' ?>>
@@ -151,7 +151,7 @@ require __DIR__.'/includes/header.php';
             <input type="url" id="campaign-destination" name="destination_url" maxlength="2048" value="<?= campaign_escape($values['destination_url']) ?>" placeholder="https://your-website.example" aria-describedby="destination-help<?= isset($errors['destination_url']) ? ' destination-error' : '' ?>" <?= isset($errors['destination_url']) ? 'aria-invalid="true"' : '' ?>>
             <p id="destination-help" class="campaign-muted">An HTTPS link for your plan. We do not visit it or publish it from this page.</p>
             <?php if (isset($errors['destination_url'])): ?><p id="destination-error" class="campaign-field-error"><?= campaign_escape($errors['destination_url']) ?></p><?php endif; ?>
-            <?php if ($editable): ?><button type="submit" class="campaign-primary">Save draft</button><?php endif; ?>
+            <?php if ($editable): ?><p class="campaign-save-state" data-save-state role="status"><?= $_SERVER['REQUEST_METHOD'] === 'POST' ? 'Unsaved changes — save your draft before leaving.' : 'No unsaved changes.' ?></p><button type="submit" class="campaign-primary">Save draft</button><?php endif; ?>
           </fieldset>
         </form>
         <?php if (!$editable): ?><p>This campaign is read-only here because it is no longer a draft.</p><?php endif; ?>
@@ -176,11 +176,11 @@ require __DIR__.'/includes/header.php';
     <?php endif; ?>
     <details id="campaign-help" class="campaign-panel"><summary>Help with campaign drafts</summary>
       <p>Save a name, venue, planned radius, format and promotion text, then reopen the draft from “Your campaigns” on the dashboard. You can leave the venue for later. Only the advertiser’s current active owner can save changes.</p>
-      <p>Saving does not publish an ad, reserve placement or charge you. Pricing, venue selection, uploads and delivery will be separate steps when available.</p>
+      <p>Saving does not publish an ad, reserve placement or charge you. Pricing, uploads and delivery will be separate steps when available.</p>
       <p>If another tab changes the draft, reload before saving. If a save is interrupted, check your dashboard before creating another draft.</p>
     </details>
     <footer class="campaign-page-footer"><a href="advertiser_dashboard.php">Advertiser dashboard</a><span>Campaign planning · Drafts only</span></footer>
   </main>
 </div>
-<script src="assets/campaigns.js?v=drafts-3" defer></script>
+<script src="assets/campaigns.js?v=drafts-4" defer></script>
 <?php require __DIR__.'/includes/footer.php'; ?>

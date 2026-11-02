@@ -88,7 +88,7 @@ assuming the fresh baseline is compatible. Native MySQL save/update and concurre
 write checks on that actual schema remain required before deployment.
 
 Install the editor, helper and two assets together. Asset loaders are versioned
-CSS `drafts-5` and JavaScript `drafts-3`; advance each changed asset's references
+editor CSS `drafts-6` (dashboard `drafts-5`) and JavaScript `drafts-4`; advance each changed asset's references
 for later revisions. Retain the current
 shared header/footer. Back up replaced source and database before approved
 schema work. Recovery restores the prior source; preserve campaign drafts and
@@ -138,3 +138,15 @@ call this restyle visually accepted or production-ready while that required
 shell asset and browser evidence are missing. No exception is inferred from the
 legacy header. Existing `/fitbuds/` absolute header links also need confirmation
 against the actual mount path. Local editor/sidebar links are relative.
+
+## In-progress edits
+
+The editor displays whether the current form differs from the values loaded on
+this page. A rejected POST remains marked unsaved, including when its fields
+are left untouched. Browsers can warn before leaving an edited draft; their native prompt
+is subject to browser interaction rules. This is not autosave or recovery storage.
+A valid save disables its submit button while navigating, preventing repeated
+clicks on that page. Browser Back restores the button. Existing server-side
+validation, CSRF and stale-draft protection remain authoritative. If a request is
+interrupted, inspect the dashboard before retrying; a lost response is not proof
+that a save failed. This does not provide cross-tab request idempotency.
