@@ -23,6 +23,7 @@ def main():
         sessions = root / 'sessions'
         sessions.mkdir()
         (root / 'includes').mkdir()
+        shutil.copyfile(ROOT / 'includes/campaigns.php', root / 'includes/campaigns.php')
         for name in ('advertiser_login.php', 'advertiser_dashboard.php'):
             shutil.copyfile(ROOT / name, root / name)
         (root / 'includes/db.php').write_text(DB)
@@ -126,4 +127,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 

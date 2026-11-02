@@ -28,6 +28,8 @@ class FixtureStatement {
     function store_result() {}
     function close() {}
     function get_result() {
+        if (str_starts_with(trim($this->sql), 'SELECT role FROM advertiser_users'))
+            return new FixtureResult([['role'=>'owner']]);
         if (str_contains($this->sql, 'password_hash')) return new FixtureResult([[
             'id'=>7,'advertiser_id'=>9,'name'=>'Fixture','role'=>'owner',
             'advertiser_name'=>'Synthetic venue',
@@ -67,6 +69,7 @@ def main():
         for name in ('advertiser_login.php', 'advertiser_register.php', 'advertiser_dashboard.php'):
             shutil.copyfile(ROOT / name, root / name)
         (root / 'includes').mkdir()
+        shutil.copyfile(ROOT / 'includes/campaigns.php', root / 'includes/campaigns.php')
         (root / 'sessions').mkdir()
         (root / 'includes/db.php').write_text(DB)
         (root / 'includes/header.php').write_text('<!doctype html><html><body><main>fixture-shell\n')
@@ -151,4 +154,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
