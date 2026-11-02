@@ -1,7 +1,6 @@
 <?php
 session_start();
 require __DIR__ . "/includes/db.php";
-require __DIR__ . "/includes/header.php";
 
 $message = "";
 
@@ -129,6 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 }
+require __DIR__ . "/includes/header.php";
 ?>
 
 <h2>Advertiser Registration</h2>
