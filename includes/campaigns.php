@@ -57,20 +57,44 @@ function campaign_owner($db, int $user, int $advertiser): bool {
     return $allowed;
 }
 
-function campaign_list($db, int $advertiser, string $search, bool $draft_only): array {
+function campaign_list($db, int $advertiser, string $search, string $status): array {
     // Literal substring search: user '%'/'_' are not SQL wildcard operators.
     $pattern = '%'.str_replace(['=', '%', '_'], ['==', '=%', '=_'], $search).'%';
-    $draft = $draft_only ? 1 : 0;
+    if (!in_array($status, ['', 'draft', 'archived'], true)) throw new InvalidArgumentException('Unsupported filter.');
     $stmt = $db->prepare("SELECT id, name, status, target_radius_km, media_type
         FROM ad_campaigns WHERE advertiser_id = ? AND name LIKE ? ESCAPE '='
-        AND (? = 0 OR status = 'draft') ORDER BY created_at DESC, id DESC LIMIT 100");
-    $stmt->bind_param('isi', $advertiser, $pattern, $draft);
+        AND (? = '' OR status = ?) ORDER BY created_at DESC, id DESC LIMIT 100");
+    $stmt->bind_param('isss', $advertiser, $pattern, $status, $status);
     $stmt->execute();
     $rows = [];
     $result = $stmt->get_result();
     while ($row = $result->fetch_assoc()) $rows[] = $row;
     $stmt->close();
     return $rows;
+}
+
+function campaign_duplicate($db, int $advertiser, array $source): int {
+    if (preg_match('/^.{0,150}/us', (string)$source['name'], $parts) !== 1) {
+        throw new RuntimeException('Campaign name unavailable.');
+    }
+    $values = ['name'=>$parts[0].' (copy)', 'target_radius_km'=>(string)$source['target_radius_km'],
+        'media_type'=>$source['media_type'], 'headline'=>$source['headline'] ?? '',
+        'message'=>$source['message'] ?? '', 'destination_url'=>$source['destination_url'] ?? ''];
+    [$values, $errors] = campaign_input($values);
+    if ($errors) throw new RuntimeException('Source campaign requires review before copying.');
+    return campaign_create($db, $advertiser, $values);
+}
+
+function campaign_transition($db, int $advertiser, int $id, string $from, string $to): bool {
+    if (!(($from === 'draft' && $to === 'archived') || ($from === 'archived' && $to === 'draft'))) {
+        throw new InvalidArgumentException('Unsupported transition.');
+    }
+    $stmt = $db->prepare('UPDATE ad_campaigns SET status = ? WHERE id = ? AND advertiser_id = ? AND status = ?');
+    $stmt->bind_param('siis', $to, $id, $advertiser, $from);
+    if (!$stmt->execute()) throw new RuntimeException('Campaign status was not saved.');
+    $changed = $stmt->affected_rows === 1;
+    $stmt->close();
+    return $changed;
 }
 
 function campaign_find($db, int $advertiser, int $id): ?array {

@@ -5,7 +5,7 @@ advertiser account and `ad_campaigns` columns already referenced by the dashboar
 It does not enable an ad-serving or billing system.
 
 The connected `advertiser_dashboard.php` now searches campaign names, filters
-drafts and provides edit/view links. Search is a literal substring, so `%` and `_`
+drafts/archived campaigns and provides edit/view links. Search is a literal substring, so `%` and `_`
 do not become wildcards. Lists are advertiser-scoped, newest first, capped at 100
 matching rows with a visible limit notice. Empty and filtered-empty states have
 clear next actions. Staff retain read-only campaign visibility; current active
@@ -13,6 +13,16 @@ owner membership is required for editing. The dashboard rechecks membership on
 each request. Legacy aggregate metrics remain all-time and independent of list
 filters. Missing metrics do not block campaign planning and display unavailable,
 never a fabricated zero.
+
+Owners can duplicate any compatible owned campaign into a NEW draft containing
+its current settings and text, with a `(copy)` name. The source's delivery status
+is never copied. Drafts can be archived and restored without deleting content.
+Archive is refused for active/non-draft campaigns; restore only accepts archived
+rows and always returns them to draft. These actions are POST-only, session-CSRF
+protected, fresh-owner checked and advertiser scoped. Current status is matched
+in the UPDATE predicate. Staff cannot submit these actions. The dashboard uses
+post/redirect/get and session flash messages; interrupted duplicate requests
+should be reconciled from the library before another copy is requested.
 
 ## Working flow
 
@@ -56,6 +66,9 @@ The still-unapplied baseline now includes headline/message/destination_url. An
 existing database, including an earlier prototype baseline, needs explicit
 column/default reconciliation before this revision; the editor does not perform
 implicit ALTERs. This is source preparation, not an installed schema migration.
+The baseline's status VARCHAR supports `archived`; an existing status ENUM or
+CHECK must be inspected and explicitly reconciled before archive/restore is
+enabled on that database. This patch never alters status constraints at runtime.
 
 Before installing into an existing database, inspect its actual `SHOW CREATE
 TABLE ad_campaigns`, table engine, required columns without defaults, triggers,
@@ -66,7 +79,7 @@ assuming the fresh baseline is compatible. Native MySQL save/update and concurre
 write checks on that actual schema remain required before deployment.
 
 Install the editor, helper and two assets together. Asset loaders are versioned
-CSS `drafts-3` and JavaScript `drafts-2`; advance each changed asset's references
+CSS `drafts-4` and JavaScript `drafts-2`; advance each changed asset's references
 for later revisions. Retain the current
 shared header/footer. Back up replaced source and database before approved
 schema work. Recovery restores the prior source; preserve campaign drafts and
@@ -84,7 +97,8 @@ active-campaign refusal, foreign advertiser isolation, staff refusal and bad IDs
 The connected dashboard checks include campaign search/draft filter, literal
 wildcard search, read-only staff, foreign advertiser empty state and missing
 metrics recovery. Creative persistence/escaped rendering, unsafe/credentialed
-destination refusal and headline bounds extend the suite to 24 HTTP requests
+destination refusal and headline bounds, plus archive/restore/duplicate and
+their cross-owner/staff/CSRF/state controls extend the suite to 35 HTTP requests
 with its synthetic data collaborator. The directly affected existing 10-case
 advertiser HTTP fixture and real PHP session/CSRF/credential fixture also pass;
 their test copies now include the dashboard helper and membership response.

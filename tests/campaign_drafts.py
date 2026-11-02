@@ -40,7 +40,7 @@ class CampaignStatement {
             $literal=substr($p[1],1,-1);
             $literal=preg_replace('/=(.)/s','$1',$literal);
             $rows=array_values(array_filter($data,function($r) use($p,$literal) {
-                return $r['advertiser_id']===$p[0] && (!$p[2] || $r['status']==='draft')
+                return $r['advertiser_id']===$p[0] && ($p[2]==='' || $r['status']===$p[2])
                     && stripos($r['name'],$literal)!==false;
             }));
             usort($rows,fn($a,$b)=>$b['id']<=>$a['id']); $this->rows=array_slice($rows,0,100);
@@ -56,6 +56,12 @@ class CampaignStatement {
                 'name'=>$p[1],'status'=>'draft','target_radius_km'=>$p[2],'media_type'=>$p[3],
                 'headline'=>$p[4],'message'=>$p[5],'destination_url'=>$p[6]];
             file_put_contents($file,json_encode($data));
+        } elseif (str_starts_with($this->sql,'UPDATE ad_campaigns SET status')) {
+            $r=$data[(string)$p[1]] ?? null;
+            if ($r && $r['advertiser_id']===$p[2] && $r['status']===$p[3]) {
+                $data[(string)$p[1]]['status']=$p[0]; $this->affected_rows=1;
+                file_put_contents($file,json_encode($data));
+            }
         } elseif (str_starts_with($this->sql,'UPDATE ad_campaigns')) {
             if (!str_contains($this->sql,"advertiser_id = ? AND status = 'draft'")) throw new RuntimeException('Unscoped update');
             $r=$data[(string)$p[6]] ?? null;
@@ -171,7 +177,7 @@ def main():
                 status,_,html=req('/advertiser_dashboard.php')
                 assert status==200 and 'Updated campaign' in html and 'Active campaign' in html and '$1.25' in html
                 status,_,html=req('/advertiser_dashboard.php?filter=draft&q=Updated')
-                assert status==200 and 'Updated campaign' in html and 'Active campaign' not in html
+                assert status==200 and 'Updated campaign' in html and '<h3>Active campaign</h3>' not in html
                 assert 'Edit draft' in html and 'campaign_edit.php?id=2' in html
                 status,_,html=req('/advertiser_dashboard.php?q=%25')
                 assert status==200 and 'No matching campaigns' in html
@@ -181,6 +187,31 @@ def main():
                 assert status==200 and 'Your first campaign starts here' in html and 'Updated campaign' not in html
                 status,_,html=req('/advertiser_dashboard.php',client='staff')
                 assert status==200 and 'Ask the owner' in html and 'Edit draft' not in html
+                action={'csrf_token':csrf,'campaign_id':'2','action':'archive'}
+                assert req('/advertiser_dashboard.php',{**action,'csrf_token':'wrong'})[0]==403
+                assert req('/advertiser_dashboard.php',action,client='staff')[0]==403
+                # Foreign caller has valid own token but cannot manage advertiser9's row.
+                _,_,foreign_html=req('/campaign_edit.php',client='foreign')
+                foreign_csrf=token(foreign_html,'csrf_token')
+                assert req('/advertiser_dashboard.php',{**action,'csrf_token':foreign_csrf},client='foreign')[0]==404
+                req('/advertiser_dashboard.php?action=archive&campaign_id=2')
+                assert json.loads(data.read_text())['2']['status']=='draft'
+                assert req('/advertiser_dashboard.php',action)[0]==303
+                assert json.loads(data.read_text())['2']['status']=='archived'
+                status,_,html=req('/advertiser_dashboard.php?filter=archived')
+                assert status==200 and 'Updated campaign' in html and 'Restore draft' in html
+                assert req('/advertiser_dashboard.php',action)[0]==409
+                assert req('/advertiser_dashboard.php',{**action,'action':'restore'})[0]==303
+                assert json.loads(data.read_text())['2']['status']=='draft'
+                assert req('/advertiser_dashboard.php',{**action,'campaign_id':'1'})[0]==409
+                assert json.loads(data.read_text())['1']['status']=='active'
+                status,location,_=req('/advertiser_dashboard.php',
+                    {**action,'action':'duplicate','campaign_id':'1'})
+                assert status==303 and location=='campaign_edit.php?id=3'
+                duplicate=json.loads(data.read_text())['3']
+                assert duplicate['status']=='draft' and duplicate['advertiser_id']==9
+                assert duplicate['name']=='Active campaign (copy)'
+                assert json.loads(data.read_text())['1']['status']=='active'
                 print(f'PASS {checks} actual HTTP requests: create/reopen/edit/no-change, CSRF, '
                       'validation, stale draft, active refusal and advertiser isolation; synthetic DB only',flush=True)
                 if '--preview' in sys.argv:
