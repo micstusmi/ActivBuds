@@ -50,18 +50,23 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $user = $result->fetch_assoc();
 
             if (password_verify($password, $user["password_hash"])) {
-                // Reset attempts
-                $_SESSION['adv_login_attempts'] = [];
-
-                // Store session vars
-                $_SESSION["adv_user_id"]       = (int)$user["id"];
-                $_SESSION["adv_advertiser_id"] = (int)$user["advertiser_id"];
-                $_SESSION["adv_role"]          = $user["role"];
-                $_SESSION["adv_user_name"]     = $user["name"];
-                $_SESSION["adv_advertiser_name"] = $user["advertiser_name"];
-
-                header("Location: advertiser_dashboard.php");
-                exit;
+                // Replace the anonymous identifier before granting authenticated access.
+                if (!session_regenerate_id(true)) {
+                    $message = "Sign-in could not finish. Please try again.";
+                } else {
+                    // Reset attempts
+                    $_SESSION['adv_login_attempts'] = [];
+    
+                    // Store session vars
+                    $_SESSION["adv_user_id"]       = (int)$user["id"];
+                    $_SESSION["adv_advertiser_id"] = (int)$user["advertiser_id"];
+                    $_SESSION["adv_role"]          = $user["role"];
+                    $_SESSION["adv_user_name"]     = $user["name"];
+                    $_SESSION["adv_advertiser_name"] = $user["advertiser_name"];
+    
+                    header("Location: advertiser_dashboard.php");
+                    exit;
+                }
             } else {
                 // wrong password
                 $_SESSION['adv_login_attempts'][] = time();
