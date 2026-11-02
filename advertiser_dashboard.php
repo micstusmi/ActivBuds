@@ -1,13 +1,13 @@
 <?php
 session_start();
-require __DIR__ . "/includes/db.php";
-require __DIR__ . "/includes/header.php";
 
 // Require advertiser login
 if (!isset($_SESSION['adv_user_id'], $_SESSION['adv_advertiser_id'])) {
     header("Location: advertiser_login.php");
     exit;
 }
+
+require __DIR__ . "/includes/db.php";
 
 $advertiser_id = (int)$_SESSION['adv_advertiser_id'];
 $user_name     = $_SESSION['adv_user_name'] ?? '';
@@ -55,6 +55,7 @@ while ($row = $result->fetch_assoc()) {
     $campaigns[] = $row;
 }
 $stmt->close();
+require __DIR__ . "/includes/header.php";
 ?>
 
 <h2>Fitbuds Advertiser Dashboard</h2>
