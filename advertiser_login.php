@@ -1,8 +1,10 @@
 <?php
 session_start();
-require __DIR__ . "/includes/db.php";
 
 $message = "";
+if (!isset($_SESSION['adv_login_csrf']) || !is_string($_SESSION['adv_login_csrf'])) {
+    $_SESSION['adv_login_csrf'] = bin2hex(random_bytes(32));
+}
 
 // If already logged in as advertiser, go to dashboard
 if (isset($_SESSION['adv_user_id'])) {
@@ -30,9 +32,17 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $email    = $_POST["email"] ?? "";
     $password = $_POST["password"] ?? "";
 
-    if (count($_SESSION['adv_login_attempts']) >= $MAX_ATTEMPTS) {
+    $csrf = $_POST['csrf_token'] ?? null;
+    if (!is_string($csrf) || !hash_equals($_SESSION['adv_login_csrf'], $csrf)) {
+        http_response_code(403);
+        $message = "This sign-in form has expired. Please reload it and try again.";
+    } elseif (!is_string($email) || !is_string($password)) {
+        http_response_code(400);
+        $message = "Invalid email or password.";
+    } elseif (count($_SESSION['adv_login_attempts']) >= $MAX_ATTEMPTS) {
         $message = "Too many login attempts. Please try again later.";
     } else {
+        require __DIR__ . "/includes/db.php";
         $stmt = $conn->prepare("
             SELECT au.id, au.password_hash, au.name, au.role, au.advertiser_id, a.name AS advertiser_name
             FROM advertiser_users au
@@ -91,6 +101,7 @@ require __DIR__ . "/includes/header.php";
 <?php endif; ?>
 
 <form method="POST" class="w-50">
+  <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['adv_login_csrf'], ENT_QUOTES, 'UTF-8'); ?>">
   <div class="mb-3">
     <label class="form-label">Email</label>
     <input type="email" name="email" class="form-control" required>
