@@ -48,82 +48,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $stmt->close();
 
-            // Insert advertiser
-            $stmt = $conn->prepare("
-                INSERT INTO advertisers (name, type, is_franchise)
-                VALUES (?, ?, 0)
-            ");
-            $stmt->bind_param("ss", $adv_name, $adv_type);
-            if (!$stmt->execute()) {
-                $message = "Error creating advertiser: " . $stmt->error;
-                $stmt->close();
-            } else {
+            // Keep advertiser, location and owner creation all-or-nothing.
+            $transaction_started = false;
+            try {
+                // Transactions cannot protect partial inserts on legacy non-transactional tables.
+                $schema = $conn->prepare("SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME IN ('advertisers', 'advertiser_locations', 'advertiser_users')");
+                if (!$schema->execute()) {
+                    throw new RuntimeException('Registration storage check failed.');
+                }
+                $tables = [];
+                $result = $schema->get_result();
+                while ($table = $result->fetch_assoc()) {
+                    $tables[$table['TABLE_NAME']] = strtoupper((string)$table['ENGINE']);
+                }
+                $schema->close();
+                foreach (['advertisers', 'advertiser_locations', 'advertiser_users'] as $table) {
+                    if (($tables[$table] ?? '') !== 'INNODB') {
+                        throw new RuntimeException('Transactional registration storage required.');
+                    }
+                }
+                if (!$conn->begin_transaction()) {
+                    throw new RuntimeException('Registration transaction failed.');
+                }
+                $transaction_started = true;
+
+                $stmt = $conn->prepare("
+                    INSERT INTO advertisers (name, type, is_franchise)
+                    VALUES (?, ?, 0)
+                ");
+                $stmt->bind_param("ss", $adv_name, $adv_type);
+                if (!$stmt->execute()) {
+                    throw new RuntimeException('Advertiser creation failed.');
+                }
                 $advertiser_id = $stmt->insert_id;
                 $stmt->close();
 
-                // Insert main location
                 if ($loc_name === '') {
                     $loc_name = "Main Location";
                 }
-
                 $stmt = $conn->prepare("
                     INSERT INTO advertiser_locations (
                         advertiser_id, name, address_line1, address_line2,
                         city, state, postcode, country
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ");
-                $stmt->bind_param(
-                    "isssssss",
-                    $advertiser_id,
-                    $loc_name,
-                    $address1,
-                    $address2,
-                    $city,
-                    $state,
-                    $postcode,
-                    $country
-                );
-
+                $stmt->bind_param("isssssss", $advertiser_id, $loc_name,
+                    $address1, $address2, $city, $state, $postcode, $country);
                 if (!$stmt->execute()) {
-                    $message = "Error creating location: " . $stmt->error;
-                    $stmt->close();
-                } else {
-                    $location_id = $stmt->insert_id;
-                    $stmt->close();
-
-                    // Insert advertiser user (owner)
-                    $password_hash = password_hash($password, PASSWORD_DEFAULT);
-
-                    $stmt = $conn->prepare("
-                        INSERT INTO advertiser_users (advertiser_id, email, password_hash, name, role, is_active)
-                        VALUES (?, ?, ?, ?, 'owner', 1)
-                    ");
-                    $stmt->bind_param(
-                        "isss",
-                        $advertiser_id,
-                        $email,
-                        $password_hash,
-                        $user_name
-                    );
-
-                    if (!$stmt->execute()) {
-                        $message = "Error creating user: " . $stmt->error;
-                        $stmt->close();
-                    } else {
-                        $user_id = $stmt->insert_id;
-                        $stmt->close();
-
-                        // Log them in
-                        $_SESSION['adv_user_id']       = $user_id;
-                        $_SESSION['adv_advertiser_id'] = $advertiser_id;
-                        $_SESSION['adv_role']          = 'owner';
-                        $_SESSION['adv_user_name']     = $user_name;
-                        $_SESSION['adv_advertiser_name'] = $adv_name; // but we need $adv_name here
-           
-                        header("Location: advertiser_dashboard.php");
-                        exit;
-                    }
+                    throw new RuntimeException('Location creation failed.');
                 }
+                $stmt->close();
+
+                $password_hash = password_hash($password, PASSWORD_DEFAULT);
+                $stmt = $conn->prepare("
+                    INSERT INTO advertiser_users
+                        (advertiser_id, email, password_hash, name, role, is_active)
+                    VALUES (?, ?, ?, ?, 'owner', 1)
+                ");
+                $stmt->bind_param("isss", $advertiser_id, $email, $password_hash, $user_name);
+                if (!$stmt->execute()) {
+                    throw new RuntimeException('Owner creation failed.');
+                }
+                $user_id = $stmt->insert_id;
+                $stmt->close();
+                if (!$conn->commit()) {
+                    throw new RuntimeException('Registration commit failed.');
+                }
+                $transaction_started = false;
+            } catch (Throwable $error) {
+                if ($transaction_started) {
+                    try { $conn->rollback(); } catch (Throwable $rollback_error) {}
+                }
+                $message = "Your account could not be created. Please try again.";
+            }
+
+            // Never grant a session to a partially created account.
+            if ($message === "") {
+                $_SESSION['adv_user_id'] = $user_id;
+                $_SESSION['adv_advertiser_id'] = $advertiser_id;
+                $_SESSION['adv_role'] = 'owner';
+                $_SESSION['adv_user_name'] = $user_name;
+                $_SESSION['adv_advertiser_name'] = $adv_name;
+                header("Location: advertiser_dashboard.php");
+                exit;
             }
         }
     }
