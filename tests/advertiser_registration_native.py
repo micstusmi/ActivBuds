@@ -41,9 +41,14 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 $conn=new mysqli('localhost','root','','',0,getenv('ACTIVBUDS_TEST_SOCKET'));
 '''
 CONTROLLER = '''<?php
+// Serve a synthetic same-session form token before submitting the registration.
+session_start();
+$_SESSION['adv_register_csrf']='native-registration-token';
+session_write_close();
 $_SERVER['REQUEST_METHOD']='POST';
 $_POST=['type'=>'gym','advertiser_name'=>'Synthetic venue','user_name'=>'Fixture',
- 'email'=>'fixture@example.test','password'=>'fixture-password','password2'=>'fixture-password'];
+ 'email'=>'fixture@example.test','password'=>'fixture-password','password2'=>'fixture-password',
+ 'csrf_token'=>'native-registration-token'];
 register_shutdown_function(function() {
     $db=new mysqli('localhost','root','','activbuds_native',0,getenv('ACTIVBUDS_TEST_SOCKET'));
     $counts=[];
