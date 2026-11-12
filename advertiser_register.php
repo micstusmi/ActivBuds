@@ -1,5 +1,8 @@
 <?php
 session_start();
+if (!isset($_SESSION['adv_register_csrf']) || !is_string($_SESSION['adv_register_csrf'])) {
+    $_SESSION['adv_register_csrf'] = bin2hex(random_bytes(32));
+}
 require __DIR__ . "/includes/db.php";
 
 $message = "";
@@ -11,115 +14,148 @@ if (isset($_SESSION['adv_user_id'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $adv_type      = $_POST['type'] ?? '';
-    $adv_name      = trim($_POST['advertiser_name'] ?? '');
-    $user_name     = trim($_POST['user_name'] ?? '');
-    $email         = trim($_POST['email'] ?? '');
-    $password      = $_POST['password'] ?? '';
-    $password2     = $_POST['password2'] ?? '';
-
-    $loc_name      = trim($_POST['location_name'] ?? '');
-    $address1      = trim($_POST['address_line1'] ?? '');
-    $address2      = trim($_POST['address_line2'] ?? '');
-    $city          = trim($_POST['city'] ?? '');
-    $state         = trim($_POST['state'] ?? '');
-    $postcode      = trim($_POST['postcode'] ?? '');
-    $country       = trim($_POST['country'] ?? '');
-
-    // Basic validation
-    if (!in_array($adv_type, ['gym', 'personal_trainer', 'sporting_venue', 'other_activity'], true)) {
-        $message = "Please select a valid advertiser type.";
-    } elseif ($adv_name === '' || $user_name === '' || $email === '' || $password === '' || $password2 === '') {
-        $message = "Please fill in all required fields.";
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $message = "Please enter a valid email address.";
-    } elseif ($password !== $password2) {
-        $message = "Passwords don't match.";
+    // Form-encoded name[]=x is an array in PHP. Validate all scalars first.
+    $scalar_fields = ['type', 'advertiser_name', 'user_name', 'email', 'password', 'password2', 'location_name', 'address_line1', 'address_line2', 'city', 'state', 'postcode', 'country', 'csrf_token'];
+    $invalid_form = false;
+    foreach ($scalar_fields as $field) {
+        if (array_key_exists($field, $_POST) && !is_string($_POST[$field])) {
+            $invalid_form = true;
+            break;
+        }
+    }
+    if ($invalid_form) {
+        http_response_code(400);
+        $message = "Invalid registration form data. Please reload and try again.";
     } else {
-        // Check if email already used as advertiser_user
-        $stmt = $conn->prepare("SELECT id FROM advertiser_users WHERE email = ?");
-        $stmt->bind_param("s", $email);
-        $stmt->execute();
-        $stmt->store_result();
+        $adv_type      = $_POST['type'] ?? '';
+        $adv_name      = trim($_POST['advertiser_name'] ?? '');
+        $user_name     = trim($_POST['user_name'] ?? '');
+        $email         = trim($_POST['email'] ?? '');
+        $password      = $_POST['password'] ?? '';
+        $password2     = $_POST['password2'] ?? '';
 
-        if ($stmt->num_rows > 0) {
-            $message = "This email is already registered. Please log in instead.";
-            $stmt->close();
+        $loc_name      = trim($_POST['location_name'] ?? '');
+        $address1      = trim($_POST['address_line1'] ?? '');
+        $address2      = trim($_POST['address_line2'] ?? '');
+        $city          = trim($_POST['city'] ?? '');
+        $state         = trim($_POST['state'] ?? '');
+        $postcode      = trim($_POST['postcode'] ?? '');
+        $country       = trim($_POST['country'] ?? '');
+
+        // Creating and signing in an advertiser is a state-changing action.
+        $csrf = $_POST['csrf_token'] ?? null;
+        if (!is_string($csrf) || !hash_equals($_SESSION['adv_register_csrf'], $csrf)) {
+            http_response_code(403);
+            $message = "This registration form has expired. Please reload it and try again.";
+        } elseif (!in_array($adv_type, ['gym', 'personal_trainer', 'sporting_venue', 'other_activity'], true)) {
+            $message = "Please select a valid advertiser type.";
+        } elseif ($adv_name === '' || $user_name === '' || $email === '' || $password === '' || $password2 === '') {
+            $message = "Please fill in all required fields.";
+        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $message = "Please enter a valid email address.";
+        } elseif ($password !== $password2) {
+            $message = "Passwords don't match.";
         } else {
-            $stmt->close();
+            // Check if email already used as advertiser_user
+            $stmt = $conn->prepare("SELECT id FROM advertiser_users WHERE email = ?");
+            $stmt->bind_param("s", $email);
+            $stmt->execute();
+            $stmt->store_result();
 
-            // Insert advertiser
-            $stmt = $conn->prepare("
-                INSERT INTO advertisers (name, type, is_franchise)
-                VALUES (?, ?, 0)
-            ");
-            $stmt->bind_param("ss", $adv_name, $adv_type);
-            if (!$stmt->execute()) {
-                $message = "Error creating advertiser: " . $stmt->error;
+            if ($stmt->num_rows > 0) {
+                $message = "This email is already registered. Please log in instead.";
                 $stmt->close();
             } else {
-                $advertiser_id = $stmt->insert_id;
                 $stmt->close();
 
-                // Insert main location
-                if ($loc_name === '') {
-                    $loc_name = "Main Location";
-                }
-
-                $stmt = $conn->prepare("
-                    INSERT INTO advertiser_locations (
-                        advertiser_id, name, address_line1, address_line2,
-                        city, state, postcode, country
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ");
-                $stmt->bind_param(
-                    "isssssss",
-                    $advertiser_id,
-                    $loc_name,
-                    $address1,
-                    $address2,
-                    $city,
-                    $state,
-                    $postcode,
-                    $country
-                );
-
-                if (!$stmt->execute()) {
-                    $message = "Error creating location: " . $stmt->error;
-                    $stmt->close();
-                } else {
-                    $location_id = $stmt->insert_id;
-                    $stmt->close();
-
-                    // Insert advertiser user (owner)
-                    $password_hash = password_hash($password, PASSWORD_DEFAULT);
+                // Keep advertiser, location and owner creation all-or-nothing.
+                $transaction_started = false;
+                try {
+                    // Transactions cannot protect partial inserts on legacy non-transactional tables.
+                    $schema = $conn->prepare("SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA = DATABASE()
+                        AND TABLE_NAME IN ('advertisers', 'advertiser_locations', 'advertiser_users')");
+                    if (!$schema->execute()) {
+                        throw new RuntimeException('Registration storage check failed.');
+                    }
+                    $tables = [];
+                    $result = $schema->get_result();
+                    while ($table = $result->fetch_assoc()) {
+                        $tables[$table['TABLE_NAME']] = strtoupper((string)$table['ENGINE']);
+                    }
+                    $schema->close();
+                    foreach (['advertisers', 'advertiser_locations', 'advertiser_users'] as $table) {
+                        if (($tables[$table] ?? '') !== 'INNODB') {
+                            throw new RuntimeException('Transactional registration storage required.');
+                        }
+                    }
+                    if (!$conn->begin_transaction()) {
+                        throw new RuntimeException('Registration transaction failed.');
+                    }
+                    $transaction_started = true;
 
                     $stmt = $conn->prepare("
-                        INSERT INTO advertiser_users (advertiser_id, email, password_hash, name, role, is_active)
+                        INSERT INTO advertisers (name, type, is_franchise)
+                        VALUES (?, ?, 0)
+                    ");
+                    $stmt->bind_param("ss", $adv_name, $adv_type);
+                    if (!$stmt->execute()) {
+                        throw new RuntimeException('Advertiser creation failed.');
+                    }
+                    $advertiser_id = $stmt->insert_id;
+                    $stmt->close();
+
+                    if ($loc_name === '') {
+                        $loc_name = "Main Location";
+                    }
+                    $stmt = $conn->prepare("
+                        INSERT INTO advertiser_locations (
+                            advertiser_id, name, address_line1, address_line2,
+                            city, state, postcode, country
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ");
+                    $stmt->bind_param("isssssss", $advertiser_id, $loc_name,
+                        $address1, $address2, $city, $state, $postcode, $country);
+                    if (!$stmt->execute()) {
+                        throw new RuntimeException('Location creation failed.');
+                    }
+                    $stmt->close();
+
+                    $password_hash = password_hash($password, PASSWORD_DEFAULT);
+                    $stmt = $conn->prepare("
+                        INSERT INTO advertiser_users
+                            (advertiser_id, email, password_hash, name, role, is_active)
                         VALUES (?, ?, ?, ?, 'owner', 1)
                     ");
-                    $stmt->bind_param(
-                        "isss",
-                        $advertiser_id,
-                        $email,
-                        $password_hash,
-                        $user_name
-                    );
-
+                    $stmt->bind_param("isss", $advertiser_id, $email, $password_hash, $user_name);
                     if (!$stmt->execute()) {
-                        $message = "Error creating user: " . $stmt->error;
-                        $stmt->close();
-                    } else {
-                        $user_id = $stmt->insert_id;
-                        $stmt->close();
+                        throw new RuntimeException('Owner creation failed.');
+                    }
+                    $user_id = $stmt->insert_id;
+                    $stmt->close();
+                    if (!$conn->commit()) {
+                        throw new RuntimeException('Registration commit failed.');
+                    }
+                    $transaction_started = false;
+                } catch (Throwable $error) {
+                    if ($transaction_started) {
+                        try { $conn->rollback(); } catch (Throwable $rollback_error) {}
+                    }
+                    $message = "Your account could not be created. Please try again.";
+                }
 
-                        // Log them in
-                        $_SESSION['adv_user_id']       = $user_id;
+                // Commit is complete; rotate the anonymous ID before granting owner access.
+                // Rotation failure leaves the new account available for ordinary sign-in.
+                if ($message === "") {
+                    if (!session_regenerate_id(true)) {
+                        $message = "Your account was created, but sign-in could not finish. Please log in.";
+                    } else {
+                        unset($_SESSION['adv_register_csrf']);
+                        $_SESSION['adv_user_id'] = $user_id;
                         $_SESSION['adv_advertiser_id'] = $advertiser_id;
-                        $_SESSION['adv_role']          = 'owner';
-                        $_SESSION['adv_user_name']     = $user_name;
-                        $_SESSION['adv_advertiser_name'] = $adv_name; // but we need $adv_name here
-           
+                        $_SESSION['adv_role'] = 'owner';
+                        $_SESSION['adv_user_name'] = $user_name;
+                        $_SESSION['adv_advertiser_name'] = $adv_name;
                         header("Location: advertiser_dashboard.php");
                         exit;
                     }
@@ -138,6 +174,7 @@ require __DIR__ . "/includes/header.php";
 <?php endif; ?>
 
 <form method="POST" class="w-75">
+  <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['adv_register_csrf'], ENT_QUOTES, 'UTF-8'); ?>">
 
 <h4>Account type</h4>
 <div class="mb-3">

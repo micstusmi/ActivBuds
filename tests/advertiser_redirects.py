@@ -24,10 +24,26 @@ class FixtureStatement {
     public $num_rows=0; public $insert_id=7; public $error=''; private $sql;
     function __construct($sql) {$this->sql=$sql;}
     function bind_param($types, &...$values) {}
-    function execute() {return true;}
+    function execute() {
+        if (str_contains($this->sql, 'INSERT INTO')) {
+            $conn = $GLOBALS['conn'];
+            $conn->inserts++;
+            if (($_GET['_fixture'] ?? '') === 'fail-' . $conn->inserts) return false;
+            $conn->staged++;
+        }
+        return true;
+    }
     function store_result() {}
     function close() {}
     function get_result() {
+        if (str_contains($this->sql, 'information_schema.TABLES')) {
+            $rows=[];
+            foreach (['advertisers','advertiser_locations','advertiser_users'] as $name) {
+                if (($_GET['_fixture'] ?? '') === 'engine-missing' && $name === 'advertiser_users') continue;
+                $rows[]=['TABLE_NAME'=>$name, 'ENGINE'=>(($_GET['_fixture'] ?? '') === 'engine-unsupported' ? 'MyISAM' : 'InnoDB')];
+            }
+            return new FixtureResult($rows);
+        }
         if (str_contains($this->sql, 'password_hash')) return new FixtureResult([[
             'id'=>7,'advertiser_id'=>9,'name'=>'Fixture','role'=>'owner',
             'advertiser_name'=>'Synthetic venue',
@@ -39,7 +55,25 @@ class FixtureStatement {
         return new FixtureResult([]);
     }
 }
-class FixtureConnection {function prepare($sql) {return new FixtureStatement($sql);}}
+class FixtureConnection {
+    public $inserts=0; public $staged=0;
+    function prepare($sql) {return new FixtureStatement($sql);}
+    function begin_transaction() {
+        if (($_GET['_fixture'] ?? '') === 'fail-begin') return false;
+        file_put_contents(getenv('ACTIVBUDS_FIXTURE_LOG'), 'begin\\n', FILE_APPEND);
+        return true;
+    }
+    function commit() {
+        if (($_GET['_fixture'] ?? '') === 'fail-commit') return false;
+        file_put_contents(getenv('ACTIVBUDS_FIXTURE_LOG'), 'commit:' . $this->staged . '\\n', FILE_APPEND);
+        return true;
+    }
+    function rollback() {
+        $this->staged=0;
+        file_put_contents(getenv('ACTIVBUDS_FIXTURE_LOG'), 'rollback\\n', FILE_APPEND);
+        return true;
+    }
+}
 if (basename($_SERVER['SCRIPT_NAME']) === 'advertiser_dashboard.php'
     && !isset($_SESSION['adv_user_id'], $_SESSION['adv_advertiser_id'])) {
     throw new RuntimeException('Dashboard accessed DB before authentication');
@@ -56,6 +90,10 @@ if (($_GET['_fixture'] ?? '') === 'signed-in') {
               'adv_advertiser_name'=>'Synthetic venue'];
 }
 session_write_close();
+register_shutdown_function(function() {
+    file_put_contents(getenv('ACTIVBUDS_FIXTURE_LOG').'.session',
+        json_encode(['authenticated'=>isset($_SESSION['adv_user_id'])]));
+});
 $_SERVER['SCRIPT_NAME']=$path;
 require __DIR__.$path;
 '''
@@ -78,7 +116,8 @@ def main():
         with (root / 'server.log').open('w+') as log:
             server = subprocess.Popen([PHP, '-d', 'output_buffering=0', '-d', 'display_errors=1',
                 '-d', 'session.save_path=' + str(root / 'sessions'), '-S', f'127.0.0.1:{port}',
-                '-t', str(root), str(root / 'router.php')], stdout=log, stderr=log)
+                '-t', str(root), str(root / 'router.php')], stdout=log, stderr=log,
+                env={**os.environ, 'ACTIVBUDS_FIXTURE_LOG':str(root / 'transactions.log')})
             try:
                 for _ in range(100):
                     if server.poll() is not None:
@@ -91,19 +130,32 @@ def main():
                 else:
                     raise AssertionError('PHP HTTP server did not become ready')
 
-                def request(path, fields=None, signed=False, redirect=None):
+                def request(path, fields=None, signed=False, redirect=None, fixture=None,
+                            csrf_mode='valid', expected_status=200):
                     nonlocal count
-                    if signed:
-                        path += '?_fixture=signed-in'
+                    if signed or fixture:
+                        path += '?_fixture=' + (fixture or 'signed-in')
                     conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
                     try:
                         headers={'Content-Type':'application/x-www-form-urlencoded'}
-                        if fields is not None and path.startswith('/advertiser_login.php'):
-                            conn.request('GET','/advertiser_login.php')
+                        if fields is not None and path.startswith(('/advertiser_login.php', '/advertiser_register.php')):
+                            form_path=path.split('?',1)[0]
+                            conn.request('GET', form_path)
                             form=conn.getresponse()
                             html=form.read().decode()
-                            headers['Cookie']=form.getheader('Set-Cookie').split(';',1)[0]
-                            fields={**fields,'csrf_token':re.search(r'name="csrf_token" value="([a-f0-9]+)"',html).group(1)}
+                            cookie=form.getheader('Set-Cookie')
+                            assert form.status == 200 and cookie, (form_path, form.status)
+                            headers['Cookie']=cookie.split(';',1)[0]
+                            token=re.search(r'name="csrf_token" value="([a-f0-9]+)"',html)
+                            assert token, form_path
+                            if csrf_mode == 'valid':
+                                fields={**fields, 'csrf_token':token.group(1)}
+                            elif csrf_mode == 'bad':
+                                fields={**fields, 'csrf_token':'0'*64}
+                            elif csrf_mode == 'missing':
+                                fields={k:v for k,v in fields.items() if k != 'csrf_token'}
+                            else:
+                                raise AssertionError('Unknown CSRF fixture mode')
                         conn.request('POST' if fields is not None else 'GET', path,
                             urlencode(fields) if fields is not None else None,headers)
                         response = conn.getresponse()
@@ -113,8 +165,13 @@ def main():
                             assert response.status == 302, (path,response.status,body)
                             assert response.getheader('Location') == redirect
                             assert 'fixture-shell' not in body, 'HTML emitted before redirect'
+                            if path.startswith('/advertiser_register.php') and fields is not None:
+                                authenticated_cookie=response.getheader('Set-Cookie')
+                                assert authenticated_cookie, 'registration must rotate session cookie'
+                                assert authenticated_cookie.split(';',1)[0] != headers['Cookie'], \
+                                    'registration reused anonymous session identifier'
                         else:
-                            assert response.status == 200, (path,response.status,body)
+                            assert response.status == expected_status, (path,response.status,body)
                             assert body.count('fixture-shell') == 1
                             assert '</html>' in body
                         count += 1
@@ -139,6 +196,39 @@ def main():
                 assert 'Please fill in all required fields.' in body
                 body=request('/advertiser_dashboard.php', signed=True)
                 assert 'Total impressions' in body and '$1.25' in body
+                tx=root / 'transactions.log'
+                assert 'commit:3' in tx.read_text()
+                fields={'type':'gym','advertiser_name':'Synthetic venue',
+                    'user_name':'Fixture','email':'fixture@example.test',
+                    'password':'fixture-password','password2':'fixture-password'}
+                for mode in ('missing', 'bad'):
+                    tx.write_text('')
+                    body=request('/advertiser_register.php', fields, csrf_mode=mode,
+                                 expected_status=403)
+                    assert 'This registration form has expired.' in body
+                    assert 'begin' not in tx.read_text() and 'commit:' not in tx.read_text()
+                    assert not __import__('json').loads((root / 'transactions.log.session').read_text())['authenticated']
+                # PHP form name[]=x becomes an array; no normalization, DB or auth.
+                for malformed_field in ('type', 'advertiser_name', 'user_name', 'email',
+                                        'password', 'password2', 'location_name', 'csrf_token'):
+                    tx.write_text('')
+                    malformed = dict(fields)
+                    malformed.pop(malformed_field, None)
+                    malformed[malformed_field + '[]'] = 'synthetic-array'
+                    body = request('/advertiser_register.php', malformed,
+                                   csrf_mode='missing' if malformed_field == 'csrf_token' else 'valid',
+                                   expected_status=400)
+                    assert 'Invalid registration form data.' in body, malformed_field
+                    assert 'begin' not in tx.read_text() and 'commit:' not in tx.read_text()
+                    assert not __import__('json').loads((root / 'transactions.log.session').read_text())['authenticated']
+                for failure in ('engine-missing','engine-unsupported','fail-begin','fail-1','fail-2','fail-3','fail-commit'):
+                    tx.write_text('')
+                    body=request('/advertiser_register.php', fields, fixture=failure)
+                    assert 'Your account could not be created. Please try again.' in body
+                    trace=tx.read_text()
+                    assert 'commit:' not in trace
+                    assert ('rollback' in trace) == failure.startswith(('fail-1','fail-2','fail-3','fail-commit'))
+                    assert not __import__('json').loads((root / 'transactions.log.session').read_text())['authenticated']
                 print(f'PASS {count} actual HTTP cases with PHP output buffering disabled; '
                       'synthetic DB/session only, no live database or deployment')
             finally:
@@ -151,4 +241,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
