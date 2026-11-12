@@ -208,6 +208,19 @@ def main():
                     assert 'This registration form has expired.' in body
                     assert 'begin' not in tx.read_text() and 'commit:' not in tx.read_text()
                     assert not __import__('json').loads((root / 'transactions.log.session').read_text())['authenticated']
+                # PHP form name[]=x becomes an array; no normalization, DB or auth.
+                for malformed_field in ('type', 'advertiser_name', 'user_name', 'email',
+                                        'password', 'password2', 'location_name', 'csrf_token'):
+                    tx.write_text('')
+                    malformed = dict(fields)
+                    malformed.pop(malformed_field, None)
+                    malformed[malformed_field + '[]'] = 'synthetic-array'
+                    body = request('/advertiser_register.php', malformed,
+                                   csrf_mode='missing' if malformed_field == 'csrf_token' else 'valid',
+                                   expected_status=400)
+                    assert 'Invalid registration form data.' in body, malformed_field
+                    assert 'begin' not in tx.read_text() and 'commit:' not in tx.read_text()
+                    assert not __import__('json').loads((root / 'transactions.log.session').read_text())['authenticated']
                 for failure in ('engine-missing','engine-unsupported','fail-begin','fail-1','fail-2','fail-3','fail-commit'):
                     tx.write_text('')
                     body=request('/advertiser_register.php', fields, fixture=failure)
