@@ -1,5 +1,8 @@
 <?php
 session_start();
+if (!isset($_SESSION['adv_register_csrf']) || !is_string($_SESSION['adv_register_csrf'])) {
+    $_SESSION['adv_register_csrf'] = bin2hex(random_bytes(32));
+}
 require __DIR__ . "/includes/db.php";
 
 $message = "";
@@ -26,8 +29,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $postcode      = trim($_POST['postcode'] ?? '');
     $country       = trim($_POST['country'] ?? '');
 
-    // Basic validation
-    if (!in_array($adv_type, ['gym', 'personal_trainer', 'sporting_venue', 'other_activity'], true)) {
+    // Creating and signing in an advertiser is a state-changing action.
+    $csrf = $_POST['csrf_token'] ?? null;
+    if (!is_string($csrf) || !hash_equals($_SESSION['adv_register_csrf'], $csrf)) {
+        http_response_code(403);
+        $message = "This registration form has expired. Please reload it and try again.";
+    } elseif (!in_array($adv_type, ['gym', 'personal_trainer', 'sporting_venue', 'other_activity'], true)) {
         $message = "Please select a valid advertiser type.";
     } elseif ($adv_name === '' || $user_name === '' || $email === '' || $password === '' || $password2 === '') {
         $message = "Please fill in all required fields.";
@@ -124,15 +131,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message = "Your account could not be created. Please try again.";
             }
 
-            // Never grant a session to a partially created account.
+            // Commit is complete; rotate the anonymous ID before granting owner access.
+            // Rotation failure leaves the new account available for ordinary sign-in.
             if ($message === "") {
-                $_SESSION['adv_user_id'] = $user_id;
-                $_SESSION['adv_advertiser_id'] = $advertiser_id;
-                $_SESSION['adv_role'] = 'owner';
-                $_SESSION['adv_user_name'] = $user_name;
-                $_SESSION['adv_advertiser_name'] = $adv_name;
-                header("Location: advertiser_dashboard.php");
-                exit;
+                if (!session_regenerate_id(true)) {
+                    $message = "Your account was created, but sign-in could not finish. Please log in.";
+                } else {
+                    unset($_SESSION['adv_register_csrf']);
+                    $_SESSION['adv_user_id'] = $user_id;
+                    $_SESSION['adv_advertiser_id'] = $advertiser_id;
+                    $_SESSION['adv_role'] = 'owner';
+                    $_SESSION['adv_user_name'] = $user_name;
+                    $_SESSION['adv_advertiser_name'] = $adv_name;
+                    header("Location: advertiser_dashboard.php");
+                    exit;
+                }
             }
         }
     }
@@ -147,6 +160,7 @@ require __DIR__ . "/includes/header.php";
 <?php endif; ?>
 
 <form method="POST" class="w-75">
+  <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['adv_register_csrf'], ENT_QUOTES, 'UTF-8'); ?>">
 
 <h4>Account type</h4>
 <div class="mb-3">
